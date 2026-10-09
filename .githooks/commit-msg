@@ -1,0 +1,9 @@
+#!/bin/sh
+# Conventional Commits: "type: summary" or "type(scope): summary"; see docs/decisions/0005.
+first=$(head -n 1 "$1")
+case "$first" in Merge*|Revert*) exit 0 ;; esac
+if printf '%s\n' "$first" | grep -Eq '^(feat|fix|refactor|perf|test|docs|build|chore|style|revert)(\([a-z0-9 -]+\))?!?: .+'; then
+  exit 0
+fi
+echo "commit message must start like 'fix: ...' or 'feat(list): ...' (docs/decisions/0005)" >&2
+exit 1

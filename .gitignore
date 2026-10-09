@@ -1,0 +1,5 @@
+.claude/worktrees/
+.venv
+__pycache__/
+*.pyc
+snapshot_report.html

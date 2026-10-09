@@ -1,0 +1,105 @@
+"""Picture tests: the look Pepe approved on 2026-10-08 ("it looks great no problems"), locked in.
+
+Each test draws a screen headless and compares it with the saved SVG in __snapshots__/. A change to the
+look fails here on purpose: if the change is wanted, look at the report, then run
+`.venv/bin/python -m pytest tests/app/test_pictures.py --snapshot-update` and commit the new pictures.
+The clock and the working dot's pulse are frozen, so a picture only changes when the look does.
+"""
+
+import os
+import time
+
+import pytest
+from helpers import NOW, row
+
+from cockpit import app as appmod
+from cockpit import store, tmuxctl, welcome
+
+HOME = os.path.expanduser("~")
+# his 119x29 terminal less the key bar and the line over it: every pane is 27 rows
+LIST = (42, 27)  # the list pane
+ZOOMED = (119, 27)  # a dialog has the whole window
+LIVE = (76, 27)  # the Claude side
+
+
+@pytest.fixture
+def rows():
+    return [
+        row("needs-aaa", "needs", name="pricing-page", question="Ship the new pricing table now, or keep the A/B test running?",
+            cwd=f"{HOME}/Projects/storefront", where="storefront"),
+        row("work-bbbb", "working", name="rate limits", cwd=f"{HOME}/Projects/api", where="api",
+            detail="adding a token bucket to the public endpoints", startedAt=NOW - 1_080_000, turnStart=NOW - 1_080_000),
+        row("work-cccc", "working", name="schema migration", cwd=f"{HOME}/Projects/api", where="api",
+            detail="backfilling the orders table in batches", ctx=960_000, startedAt=NOW - 50_000, turnStart=NOW - 50_000),
+        row("done-dddd", "done", name="flaky test hunt", cwd=f"{HOME}/Projects/storefront", where="storefront",
+            finishedAt=NOW - 120_000, away="Found it: a race in the cache warmup."),
+        row("idle-eeee", name="docs refresh", lastChange=NOW - 7_200_000),
+        row("idle-ffff", name="dependency bumps", lastChange=NOW - 9_000_000),
+    ]
+
+
+class FrozenClock:
+    """time, with time() stuck at the rows' NOW."""
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self):
+        return NOW / 1000
+
+
+@pytest.fixture
+def still(cockpit, monkeypatch):
+    monkeypatch.setattr(appmod, "time", FrozenClock())
+    monkeypatch.setattr(appmod.ListScreen, "spin", lambda self: None)  # the working dot's pulse
+    monkeypatch.setattr(tmuxctl, "launch_folder", lambda: f"{HOME}/Projects/storefront")  # not a random temp folder
+    monkeypatch.setattr(appmod, "__version__", "3.0.0")  # a release mustn't change the pictures
+    cockpit.tmux.options["@ap_want"] = "work-bbb"  # the right side shows "rate limits"
+    return cockpit
+
+
+def theme(name):
+    store.save({**store.load(), "theme": name})
+
+
+async def no_blink(pilot):
+    for field in pilot.app.screen.query("Input"):
+        field.cursor_blink = False
+    await pilot.pause(0.3)
+
+
+@pytest.mark.parametrize("name", ["neon", "mission", "tokyo"])
+def test_the_list(still, snap_compare, name):
+    theme(name)
+    assert snap_compare(still.app, terminal_size=LIST, run_before=no_blink)
+
+
+def test_the_list_while_claude_has_the_keys(still, snap_compare):
+    async def blur(pilot):
+        pilot.app.screen.set_dim(True)
+        await pilot.pause(0.3)
+
+    assert snap_compare(still.app, terminal_size=LIST, run_before=blur)
+
+
+def test_the_theme_menu_trying_mission(still, snap_compare):
+    assert snap_compare(still.app, terminal_size=LIST, press=["t", "down"], run_before=no_blink)
+
+
+def test_the_new_session_dialog(still, snap_compare):
+    async def open_it(pilot):
+        await pilot.press("n")
+        await no_blink(pilot)
+
+    assert snap_compare(still.app, terminal_size=ZOOMED, run_before=open_it)
+
+
+def test_all_keys(still, snap_compare):
+    assert snap_compare(still.app, terminal_size=ZOOMED, press=["question_mark"], run_before=no_blink)
+
+
+def test_the_welcome_screen(monkeypatch, tmp_path, snap_compare):
+    monkeypatch.setattr(store, "PATH", str(tmp_path / "state.json"))
+    monkeypatch.setattr(tmuxctl, "launch_folder", lambda: f"{HOME}/Projects/storefront")
+    monkeypatch.setattr(welcome, "tip", lambda day=None: welcome.TIPS[1])
+    assert snap_compare(welcome.Welcome(), terminal_size=LIVE, run_before=no_blink)

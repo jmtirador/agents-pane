@@ -1,0 +1,3 @@
+#!/bin/sh
+# Every commit runs the fast checks (lint, unit and app tests); see docs/decisions/0004.
+exec make -s check

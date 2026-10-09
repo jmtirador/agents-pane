@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8
+pytest-asyncio
+pytest-textual-snapshot==1.1.0
+ruff

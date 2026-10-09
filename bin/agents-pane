@@ -1,0 +1,36 @@
+#!/bin/bash
+# Open the agents cockpit: your Claude Code sessions on the left, the one you pick live on the right.
+#   agents-pane            open it (it keeps running when you leave, so later opens are instant)
+#   agents-pane "prompt"   also start a session in this folder with that prompt and show it live
+# AGENTS_PANE_SESSION=agents-preview agents-pane   runs a second cockpit beside the real one (a preview of a branch)
+set -euo pipefail
+root="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
+py="$root/.venv/bin/python"
+s="${AGENTS_PANE_SESSION:-agents}"
+# if the list ever dies, its terminal is put back to normal and it waits for Enter to start again; the "=name:"
+# targets are quoted because tmux runs this with zsh, where a bare =word is a command lookup that ends the loop
+list_cmd=$(printf 'cd %q; while ! env PYTHONPATH=%q %q -m cockpit; do tmux set-option -u -t "=%q:" @ap_alert; tmux set-option -u -t "=%q:" @ap_waiting; tmux set-option -u -t "=%q:" @ap_dialog; stty sane; printf "\\033[?1049l\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1004l\\033[?1006l\\033[?1015l\\033[?1016l\\033[?2004l\\033[?25h\\nThe list stopped (see above). Press enter to start it again. "; read -r answer; done' "$root" "$root" "$py" "$s" "$s" "$s")
+live_cmd=$(printf 'cd %q && exec env PYTHONPATH=%q %q -m cockpit.live' "$root" "$root" "$py")
+
+# a cockpit missing one of its two panes can't heal in place (panes are never re-created), so rebuild it
+if tmux has-session -t "=$s" 2>/dev/null && [[ $(tmux list-panes -t "=$s:cockpit" -F '#{@ap_role}' 2>/dev/null | sort | tr '\n' ' ') != "list live " ]]; then
+  tmux kill-session -t "=$s"
+fi
+if ! tmux has-session -t "=$s" 2>/dev/null; then
+  tmux new-session -d -s "$s" -n cockpit -x "$(tput cols 2>/dev/null || echo 119)" -y "$(tput lines 2>/dev/null || echo 28)" \
+    -e CLAUDE_CODE_TMUX_TRUECOLOR=1 -e COLORTERM=truecolor -e AGENTS_PANE_SESSION="$s" "$list_cmd"
+  tmux set-option -t "=$s:" @ap_cockpit 1  # set-option reads -t as a pane: "=name:" is exactly this session
+  list=$(tmux display-message -p -t "=$s:cockpit" '#{pane_id}')
+  tmux set-option -p -t "$list" @ap_role list
+  live=$(tmux split-window -h -d -t "$list" -P -F '#{pane_id}' "$live_cmd")
+  tmux set-option -p -t "$live" @ap_role live
+fi
+tmux set-environment -t "=$s" AGENTS_PANE_CWD "$PWD"
+if (( $# )); then
+  env PYTHONPATH="$root" AGENTS_PANE_SESSION="$s" "$py" -m cockpit new "$*"
+fi
+if [[ -n "${TMUX:-}" ]]; then
+  tmux switch-client -t "=$s"
+else
+  exec tmux attach -t "=$s"
+fi
