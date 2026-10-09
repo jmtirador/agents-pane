@@ -28,10 +28,12 @@ It's built around how I work (macOS, tmux, sessions running in the background), 
 
 ## How I built it
 
-I'm a college student, and Claude Code wrote most of the code.
-I designed it, used it on my own sessions the whole time, and changed whatever bugged me.
+I'm a college student, and I built this by directing Claude Code instead of writing the code by hand.
+That only works if you don't take the AI's word for things, so I set it up to check its own work.
+I wrote down what it should do and why in [`SPEC.md`](SPEC.md), had it write tests as it went (including screenshot tests that catch any unplanned change to the look), and had separate Claude sessions that hadn't written the code review it.
+Those reviews caught real bugs, like a keyboard shortcut that a test build had quietly broken in my everyday setup.
+I also used every version on my own sessions and sent it back whenever something bugged me.
 It took a few rounds: the first version was a side panel I didn't like, the second had too many bold keys and borders, and this is the one I actually use.
-If you're curious how it fits together, start with [`SPEC.md`](SPEC.md) and [`docs/decisions/`](docs/decisions/).
 
 ## Install
 
