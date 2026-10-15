@@ -30,11 +30,11 @@ def test_quiet_lines_and_no_title_lines(rig):  # P2, and Pepe's ask for a line o
 def test_the_bar_lists_the_keys_for_the_side_that_has_them(rig):  # P3, P6
     ready(rig)
     bottom = lambda: rig.whole_screen().rstrip("\n").split("\n")[-1]  # noqa: E731
-    rig.wait_for(lambda: "go to Claude" in bottom(), "the list's keys in the bar")
+    rig.wait_for(lambda: "all keys" in bottom() and "q close" in bottom(), "the list's keys in the bar, with a way to close (F4)")
     rig.press("Tab")
-    rig.wait_for(lambda: "back to your sessions" in bottom() and "go to Claude" not in bottom(), "only the way back in the bar")
+    rig.wait_for(lambda: "back to your sessions" in bottom() and "all keys" not in bottom(), "only the way back (and close) in the bar")
     rig.press("C-]")
-    rig.wait_for(lambda: "go to Claude" in bottom(), "the list's keys again")
+    rig.wait_for(lambda: "all keys" in bottom(), "the list's keys again")
 
 
 def test_the_list_steps_back_while_claude_has_the_keys(rig):  # P6

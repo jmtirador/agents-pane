@@ -9,12 +9,10 @@ from cockpit import sessions as ap
 NOW = int(time.time() * 1000)
 
 
-def assistant(text="", usage=None, tools=(), at="2026-10-07T02:00:00.000Z", error=False):
+def assistant(text="", tools=(), at="2026-10-07T02:00:00.000Z", error=False):
     content = [{"type": "text", "text": text}] if text else []
     content += [{"type": "tool_use", "id": f"t{i}", "name": n, "input": inp} for i, (n, inp) in enumerate(tools)]
     rec = {"type": "assistant", "timestamp": at, "message": {"content": content}}
-    if usage:
-        rec["message"]["usage"] = usage
     if error:
         rec["isApiErrorMessage"] = True
     return rec
@@ -41,10 +39,6 @@ class RuleA(unittest.TestCase):
 
 
 class Tail(unittest.TestCase):
-    def test_context_is_the_sum_of_all_three_input_counts(self):
-        usage = {"input_tokens": 2, "cache_creation_input_tokens": 20044, "cache_read_input_tokens": 26621}
-        self.assertEqual(ap.parse_tail([assistant("hi", usage)])["ctx"], 46667)
-
     def test_unanswered_ask_is_pending_and_an_answer_clears_it(self):
         ask = assistant(tools=[("AskUserQuestion", {"questions": [{"question": "Tea or coffee?", "options": [{"label": "Tea"}, {"label": "Coffee"}]}]})])
         pending = ap.parse_tail([ask])["pendingAsk"]

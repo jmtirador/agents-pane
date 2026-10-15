@@ -14,7 +14,7 @@ ROWS = [
     row("asks-1", "asks", question="Which folder?"),
     row("work-1", "working", name="finch-fixes"),
     row("ours-1", "working", name="cockpit work", cwd=os.path.expanduser("~/Projects/agents-pane"), where="agents-pane"),
-    row("done-1", "done", finishedAt=NOW, ctx=900_000),
+    row("done-1", "done", finishedAt=NOW),
     row("idle-1"), row("idle-2"),
 ]
 # v2's jargon (P5); a test fails if any of it is drawn again
@@ -92,12 +92,6 @@ def test_every_box_closes_and_lines_up():  # Pepe asked for the header and each 
     assert titles == ["Waiting for you", "Working", "Done"]
 
 
-def test_a_cut_off_summary_keeps_a_gap_before_the_context_warning():
-    full = row("full-1", "working", detail="fixing the dim-mode header so it stops being bold", ctx=960_000, band=2)
-    second = view.card(full, NEON, 41, NOW, 0, selected=False, live=False, watched=False)[1].plain
-    assert "…  context 99% full " in second
-
-
 def test_a_long_name_is_cut_before_it_touches_its_age():  # the boxed list once drew "…test branch39h"
     long = row("long-1", "working", name="code review of the payments test branch", band=2)
     first = view.card(long, NEON, 39, NOW, 0, selected=False, live=False, watched=False)[0].plain.rstrip()
@@ -136,7 +130,7 @@ def test_the_key_bar_is_quiet_text_not_chips():  # P3
 
 
 def test_the_bar_shows_only_the_way_back_on_the_claude_side():  # P3, P6
-    assert [what for _, what, _ in tmuxctl.CLAUDE_KEYS] == ["back to your sessions"]
+    assert [what for _, what, _ in tmuxctl.CLAUDE_KEYS] == ["back to your sessions", "close"]  # v4 (F4): close, by click
     assert len(tmuxctl.LIST_KEYS) <= 7
 
 
@@ -157,7 +151,8 @@ def test_all_keys_fits_a_zoomed_pane():  # 27 rows since the line over the keys;
 
 def test_done_and_idle_take_one_line_and_sit_back():  # design B, Pepe's pick 2026-10-09
     text, sids = drawn(selected="work-1", show_quiet=True)
-    lines_of = {sid: sids.count(sid) for sid in set(sids) if sid}
+    plain = text.plain.split("\n")
+    lines_of = {sid: sum(1 for i, s in enumerate(sids) if s == sid and plain[i].strip("│ ")) for sid in set(sids) if sid}
     assert lines_of["work-1"] == 2 and lines_of["needs-1"] == 2
     assert lines_of["done-1"] == 1 and lines_of["idle-1"] == 1
     for sid, style, _ in spans_by_line(text, sids):
@@ -172,3 +167,60 @@ def test_a_one_line_row_shows_a_few_words_of_recap_or_none():  # never a lone "�
         text = view.line(r, NEON, 39, NOW, 0, selected=False, live=False, watched=False)[0].plain
         assert "  …" not in text and len(text) == 39, text
     assert "Rewrote the" in view.line(short, NEON, 39, NOW, 0, selected=False, live=False, watched=False)[0].plain
+
+
+
+# ---------------------------------------------------------------- v4: cards that say what he needs (F6, F7, F8)
+
+
+def plain_card(r, **kw):
+    return [line.plain for line in view.card({**r, "band": model.band(r)}, NEON, 41, NOW, 0, selected=kw.get("selected", False),
+                                            live=False, watched=False, dim=kw.get("dim", False))]
+
+
+def test_a_waiting_card_says_how_long_and_shows_the_whole_question_and_its_choices():  # F7
+    question = "Ship the new pricing table now, or keep the A/B test running for one more week?"
+    lines = plain_card(row("n1", "needs", name="pricing", question=question, options=["Ship it", "Keep testing", "Other"],
+                           lastChange=NOW - 7 * 60_000, finishedAt=NOW - 7 * 60_000))
+    assert "waiting 7m" in lines[0]
+    body = " ".join(line.strip("│▌ ") for line in lines[1:])
+    assert "one more week?" in body  # the whole question, wrapped, not cut to one line
+    assert "1 Ship it" in body and "2 Keep testing" in body
+
+
+def test_a_working_card_says_what_it_does_in_words_not_tool_names():  # F8: "SendUserFile" on a card
+    step = {"clock": "12:00", "tool": "SendUserFile", "what": ""}
+    lines = plain_card(row("w1", "working", name="report", steps=[step], detail=""))
+    assert "SendUserFile" not in " ".join(lines) and "sending you a file" in lines[1]
+    bash = {"clock": "12:00", "tool": "Bash", "what": "run the tests"}
+    assert "running: run the tests" in plain_card(row("w2", "working", name="ci", steps=[bash], detail=""))[1]
+
+
+def test_a_quiet_card_says_how_long_it_has_been_silent():  # F8
+    lines = plain_card(row("q1", "quiet", name="slow", lastChange=NOW - 14 * 60_000))
+    assert "no output for 14m" in lines[1]
+
+
+def test_a_wrapped_question_loses_no_letters():  # the v4 review: lines were wrapped one letter wider than they fit
+    question = "Should I ship the pricing table today or wait for the A/B test to finish?"  # its first 37 letters end in "today"
+    body = " ".join(line.strip("│▌ ") for line in plain_card(row("n2", "needs", name="pricing", question=question))[1:])
+    assert "…" not in body and "today" in body
+
+
+def test_cards_drop_the_noise():  # F8: folder text, "showing ▸" and the context warning
+    r = row("w3", "working", name="api work", where="finch/web", detail="writing the handler")
+    text = " ".join(plain_card(r, selected=True))
+    assert "finch/web" not in text and "context" not in text and "showing" not in text
+
+
+def test_the_card_on_the_right_stays_highlighted_while_he_types_to_claude():  # F6: one "current" session
+    r = {**row("w4", "working", name="api work", detail="writing the handler"), "band": 2}
+    dimmed = view.card(r, NEON, 41, NOW, 0, selected=True, live=True, watched=False, dim=True)[0]
+    assert any(f"on {NEON.sel}" in str(span.style) for span in dimmed.spans)
+
+
+def test_the_blank_row_between_cards_opens_the_card_below():  # F2: half the rows ignored clicks
+    rows = [row("w1", "working", name="one"), row("w2", "working", name="two")]
+    text, sids = view.render(rows, model.fresh_order(rows), NEON, 41, NOW, 0, selected="w1", live=None, watched=set(), show_quiet=False)
+    gap = [i for i, line in enumerate(text.plain.split("\n")) if line.strip("│ ") == ""][0]
+    assert sids[gap] == sids[gap + 1] and sids[gap] is not None

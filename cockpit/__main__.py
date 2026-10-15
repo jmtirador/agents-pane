@@ -11,11 +11,13 @@ elif sys.argv[1:2] == ["new"]:
     job, why = tmuxctl.start(" ".join(sys.argv[2:]), os.getcwd())
     if not job:
         sys.exit(why)
-    tmuxctl.show_live(job)
+    tmuxctl.view(job)
     tmuxctl.focus("live")
 else:
+    from . import quick_esc
     from .app import CockpitApp
 
+    quick_esc.install()
     app = CockpitApp()
     app.run()
     sys.exit(app.return_code or 0)  # a crash must not look like a clean exit, or the launcher closes the pane

@@ -5,7 +5,7 @@ import os
 
 from .sessions import CLAUDE_DIR
 
-# a preview cockpit keeps its own, so it never counts toward the kill rule or changes the real one's theme or watches
+# a preview cockpit keeps its own, so it never counts toward his usage days or changes the real one's theme or watches
 _NAME = os.environ.get("AGENTS_PANE_SESSION", "agents")
 PATH = os.path.join(CLAUDE_DIR, "agents-pane", "state.json" if _NAME == "agents" else f"state-{_NAME}.json")
 DEFAULT = {"theme": "neon", "watched": [], "opens": []}

@@ -9,12 +9,14 @@ py="$root/.venv/bin/python"
 s="${AGENTS_PANE_SESSION:-agents}"
 # if the list ever dies, its terminal is put back to normal and it waits for Enter to start again; the "=name:"
 # targets are quoted because tmux runs this with zsh, where a bare =word is a command lookup that ends the loop
-list_cmd=$(printf 'cd %q; while ! env PYTHONPATH=%q %q -m cockpit; do tmux set-option -u -t "=%q:" @ap_alert; tmux set-option -u -t "=%q:" @ap_waiting; tmux set-option -u -t "=%q:" @ap_dialog; stty sane; printf "\\033[?1049l\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1004l\\033[?1006l\\033[?1015l\\033[?1016l\\033[?2004l\\033[?25h\\nThe list stopped (see above). Press enter to start it again. "; read -r answer; done' "$root" "$root" "$py" "$s" "$s" "$s")
-live_cmd=$(printf 'cd %q && exec env PYTHONPATH=%q %q -m cockpit.live' "$root" "$root" "$py")
+list_cmd=$(printf 'cd %q; while ! env PYTHONPATH=%q ESCDELAY=20 %q -m cockpit; do tmux set-option -u -t "=%q:" @ap_alert; tmux set-option -u -t "=%q:" @ap_waiting; tmux set-option -u -t "=%q:" @ap_dialog; stty sane; printf "\\033[?1049l\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1004l\\033[?1006l\\033[?1015l\\033[?1016l\\033[?2004l\\033[?25h\\033[?7h\\nThe list stopped (see above). Press enter to start it again. "; read -r answer; done' "$root" "$root" "$py" "$s" "$s" "$s")
+live_cmd=$(printf 'cd %q && exec env PYTHONPATH=%q ESCDELAY=20 %q -m cockpit.viewer welcome' "$root" "$root" "$py")
 
-# a cockpit missing one of its two panes can't heal in place (panes are never re-created), so rebuild it
-if tmux has-session -t "=$s" 2>/dev/null && [[ $(tmux list-panes -t "=$s:cockpit" -F '#{@ap_role}' 2>/dev/null | sort | tr '\n' ' ') != "list live " ]]; then
+# a cockpit missing one of its two panes can't heal in place, so rebuild it, with its hidden viewers (decision 0006);
+# so is one from before 4.0.0, whose right side isn't a viewer (no @ap_job): the upgrade is just running it again
+if tmux has-session -t "=$s" 2>/dev/null && [[ $(tmux list-panes -t "=$s:cockpit" -F '#{@ap_role}#{?#{@ap_job},+,}' 2>/dev/null | sort | tr '\n' ' ') != "list live+ " ]]; then
   tmux kill-session -t "=$s"
+  tmux kill-session -t "=$s-viewers" 2>/dev/null || true
 fi
 if ! tmux has-session -t "=$s" 2>/dev/null; then
   tmux new-session -d -s "$s" -n cockpit -x "$(tput cols 2>/dev/null || echo 119)" -y "$(tput lines 2>/dev/null || echo 28)" \
@@ -24,6 +26,7 @@ if ! tmux has-session -t "=$s" 2>/dev/null; then
   tmux set-option -p -t "$list" @ap_role list
   live=$(tmux split-window -h -d -t "$list" -P -F '#{pane_id}' "$live_cmd")
   tmux set-option -p -t "$live" @ap_role live
+  tmux set-option -p -t "$live" @ap_job welcome
 fi
 tmux set-environment -t "=$s" AGENTS_PANE_CWD "$PWD"
 if (( $# )); then

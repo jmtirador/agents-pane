@@ -5,6 +5,26 @@ The shape follows Keep a Changelog (https://keepachangelog.com/en/1.1.0/) and th
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-14
+
+Fast, and it works the way you'd expect.
+
+### Changed
+- Switching sessions is instant once you've looked at a session: each one you view keeps its own `claude attach` running in a hidden tmux session, and picking it again swaps it onto the right side in a few milliseconds instead of starting it over (about 0.05 s instead of 0.56 s, with no blank flash). Up to four sessions you looked at in the last 15 minutes stay ready this way; Claude Code stops a session's process after about an hour with nothing attached, so these no longer boot again when you come back.
+- The right side always shows the card you're on. A session it can't show, like a chat in another terminal tab, gets a short note there saying where it is.
+- One click on a background session's card opens it, with your keys in it (Enter still switches to a chat in another tmux window or resumes an ended one). The blank row between two cards opens the card below it, and messages pop up at the top of the list and go away after 3 seconds instead of covering the bottom cards.
+- Stopping a session is now capital `S` twice and deleting is capital `X` twice, so a reply typed into the list by mistake can't stop or delete anything.
+- A waiting card says how long it has waited ("waiting 4m"), shows the whole question on up to three lines, and lists its choices. A working card says what it's doing in words ("editing app.py") or "no output for 12m".
+- Cards drop the folder name, the "showing" mark and the context warning; the highlighted card is the one on the right.
+- The `u` screen just shows how often you've used the dashboard.
+
+### Added
+- `q` or Ctrl+C in the list closes the dashboard, and the bar says so; every session keeps running. Opened from inside another tmux session, it takes you back there.
+- Leaving a session from inside Claude Code (Ctrl+C twice, `←`, `/exit` or Ctrl+Z) brings the same session back on the right and gives your keys back to the list, instead of leaving Claude's own session list there.
+
+### Fixed
+- Esc closes a dialog in about half the time (0.09 s instead of 0.16 s).
+
 ## [3.1.2] - 2026-10-09
 
 ### Fixed

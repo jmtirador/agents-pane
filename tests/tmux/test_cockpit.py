@@ -22,7 +22,7 @@ def test_enter_shows_the_session_live(rig):
     rig.wait_for(lambda: "fix the flyer" in rig.screen("list"), "the session's card")
     rig.keys("list", "Enter")
     rig.wait_for(lambda: f"FAKE CLAUDE attached to {JOB}" in rig.screen("live"), "the session in the live pane")
-    assert rig.option("live", "@ap_want") == JOB
+    assert rig.option("live", "@ap_job") == JOB
 
 
 def test_a_reply_is_typed_into_the_session(rig):

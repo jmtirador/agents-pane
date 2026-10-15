@@ -12,9 +12,9 @@ So I built a split screen in tmux: all my sessions in a list on the left, with t
 
 - Lists every Claude Code session on your Mac, grouped into Waiting for you, Working, Done and Idle.
 - Shows a session that's waiting on you (a question or a permission prompt) in orange, so you notice it.
-- Opens the session you pick on the right, live; the others keep running in the background.
+- Shows the session you're on, live, on the right; switching back to one you've looked at is instant, and the others keep running in the background.
 - Lets you start a new session, reply to one without opening it, or search old sessions by what they were about.
-- Shows what each session is doing right now, and warns you when one is close to running out of context.
+- Shows what each session is doing right now in plain words, and the whole question when one is waiting on you.
 - Comes with three color themes.
 
 It works everything out from the files Claude Code already writes, so there's nothing to keep updated by hand.
@@ -54,23 +54,23 @@ bin/agents-pane
 ## Use
 
 - `bin/agents-pane` opens the dashboard or comes back to it; `bin/agents-pane "prompt"` also starts a session in the current folder and shows it live.
-- `↑↓` or `j k` pick a session, and the right side follows if it's running in the background; Enter opens any other one (an ended session restarts in the background), and the one you leave keeps running.
-- Enter, Tab or Ctrl+] puts you in the live session; Ctrl+] again (or a click) brings you back to your sessions.
+- `↑↓` or `j k` pick a session, and the right side shows it; a chat it can't show (one in a terminal tab outside tmux, say) gets a note saying where it is.
+- One click on a card, or Enter, puts you in that session to type; Ctrl+] (or a click on the list) brings you back to your sessions. Enter also switches to a chat in another tmux window, and restarts an ended session in the background.
+- Leaving a session from inside Claude Code (Ctrl+C twice, `←`, `/exit` or Ctrl+Z) brings the same session back and puts you in the list again.
 - `n` starts a session in any folder, `r` replies without opening it, and `/` finds old sessions by what they were about.
-- `w` sends a Mac notification when a session finishes, `s` twice stops one (Enter brings it back), `x` twice deletes it for good, `e` shows the idle ones, `t` opens the theme menu, and `?` lists every key.
-- In the live session, Ctrl+Z leaves it (it keeps running) and brings back the welcome screen, where you can start a new one.
-- `q` leaves the dashboard; everything keeps running.
+- `w` sends a Mac notification when a session finishes, `S` twice stops one (Enter brings it back), `X` twice deletes it for good, `e` shows the idle ones, `t` opens the theme menu, and `?` lists every key.
+- `q` or Ctrl+C in the list closes the dashboard; everything keeps running.
 - `bin/find-session invoice export` searches old sessions for "invoice export" from any terminal.
 
 ![The theme menu](docs/images/menu.png)
 
 ## How it works
 
-- `bin/agents-pane` builds a tmux session named `agents` (a tmux session, not a Claude one): the list on the left, the live pane on the right.
+- `bin/agents-pane` builds a tmux session named `agents` (a tmux session, not a Claude one): the list on the left, the session you're on at the right.
 - `cockpit/sessions.py` (standard library only) reads the session registry, the background job files and the end of each transcript, and works out each session's state.
 - `cockpit/app.py` is the list, built with Textual (a Python library for terminal apps): cards, dialogs, keys and clicks; `cockpit/view.py` draws the cards and `cockpit/model.py` holds the ordering rules, both pure and tested.
-- `cockpit/live.py` owns the right pane and swaps `claude attach` and the welcome screen inside it, so tmux never re-creates a pane (tmux 3.7c can crash when it does).
-- `cockpit/tmuxctl.py` holds the tmux and `claude` commands: the frame, the key bar, typing a reply, starting and stopping sessions.
+- `cockpit/viewer.py` runs one `claude attach` per session you've looked at; `cockpit/tmuxctl.py` keeps up to four of them warm in a hidden tmux session and swaps the one you pick onto the right side, so a switch takes milliseconds and tmux never re-creates a pane (tmux 3.7c can crash when it does). [Decision 0006](docs/decisions/0006-warm-viewers.md) has the reasoning.
+- `cockpit/tmuxctl.py` also holds the other tmux and `claude` commands: the frame, the key bar, typing a reply, starting and stopping sessions.
 - `docs/progress.md` is the build log, and `CHANGELOG.md` says what each version changed.
 
 ## Develop

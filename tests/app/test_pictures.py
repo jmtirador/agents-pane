@@ -30,7 +30,7 @@ def rows():
         row("work-bbbb", "working", name="rate limits", cwd=f"{HOME}/Projects/api", where="api",
             detail="adding a token bucket to the public endpoints", startedAt=NOW - 1_080_000, turnStart=NOW - 1_080_000),
         row("work-cccc", "working", name="schema migration", cwd=f"{HOME}/Projects/api", where="api",
-            detail="backfilling the orders table in batches", ctx=960_000, startedAt=NOW - 50_000, turnStart=NOW - 50_000),
+            detail="backfilling the orders table in batches", startedAt=NOW - 50_000, turnStart=NOW - 50_000),
         row("done-dddd", "done", name="flaky test hunt", cwd=f"{HOME}/Projects/storefront", where="storefront",
             finishedAt=NOW - 120_000, away="Found it: a race in the cache warmup."),
         row("idle-eeee", name="docs refresh", lastChange=NOW - 7_200_000),
@@ -54,7 +54,8 @@ def still(cockpit, monkeypatch):
     monkeypatch.setattr(appmod.ListScreen, "spin", lambda self: None)  # the working dot's pulse
     monkeypatch.setattr(tmuxctl, "launch_folder", lambda: f"{HOME}/Projects/storefront")  # not a random temp folder
     monkeypatch.setattr(appmod, "__version__", "3.0.0")  # a release mustn't change the pictures
-    cockpit.tmux.options["@ap_want"] = "work-bbb"  # the right side shows "rate limits"
+    cockpit.tmux.viewers["work-bbb"] = "%3"
+    cockpit.tmux.slot_job = "work-bbb"  # the right side shows "rate limits"
     return cockpit
 
 

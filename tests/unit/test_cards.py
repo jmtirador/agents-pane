@@ -44,9 +44,6 @@ class Looks(unittest.TestCase):
     def test_ages_read_short(self):
         self.assertEqual([model.age(NOW - s * 1000, NOW) for s in (5, 90, 7200, 5 * 86400)], ["5s", "1m", "2h", "5d"])
 
-    def test_context_is_measured_against_auto_compact(self):
-        self.assertEqual(model.ctx_pct(row("a", ctx=776_000)), 80)
-
     def test_mix_goes_from_one_color_to_the_other(self):
         self.assertEqual(view.mix("#000000", "#ffffff", 0), "#000000")
         self.assertEqual(view.mix("#000000", "#ffffff", 1), "#ffffff")
@@ -67,11 +64,6 @@ class Drawing(unittest.TestCase):
     def test_each_card_line_maps_back_to_its_session(self):
         lines, sids, _ = self.draw([row("w", "working"), row("d", "done", finishedAt=NOW)])
         self.assertEqual([s for s in sids if s], ["w", "w", "d"])  # a done session is one line (design B)
-
-    def test_the_card_on_the_right_says_showing(self):
-        # v3 (P6): the mark reads "showing ▸"; v2's "live ▸" looked like the cursor card's label
-        lines, _, _ = self.draw([row("abcdefgh-1", "done", finishedAt=NOW)], live="abcdefgh")
-        self.assertTrue(any("showing ▸" in line for line in lines))  # before the age on a one-line row
 
     def test_a_raw_path_shows_as_its_file_name(self):
         detail = "/Users/x/Downloads/Quarterly\\ report.html"

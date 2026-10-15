@@ -25,7 +25,12 @@ FAKE_CLAUDE = r"""#!/bin/bash
 echo "claude $*" >> "$CLAUDE_CONFIG_DIR/calls.log"
 case "$1" in
   attach) printf '\033[2J\033[HFAKE CLAUDE attached to %s\n\n❯ \n' "$2"
-          while IFS= read -r line; do echo "$2 got: $line" >> "$CLAUDE_CONFIG_DIR/typed.log"; printf '\n⏺ ok\n\n❯ \n'; done ;;
+          while IFS= read -r line; do
+            # /exit (like ← and Ctrl+C twice) turns the same process into Claude's own session list, as 2.1.300 does
+            [ "$line" = "/exit" ] && { printf '\033[2J\033[HFAKE CLAUDE AGENT VIEW\n'; exec -a "claude agents" sleep 600; }
+            [ "$line" = "/ctrl-z" ] && exit 0  # Ctrl+Z really exits (a stopped fake would hang the test instead)
+            echo "$2 got: $line" >> "$CLAUDE_CONFIG_DIR/typed.log"; printf '\n⏺ ok\n\n❯ \n'
+          done ;;
   agents) echo '[]' ;;
   stop|rm) exit 0 ;;
   *) echo "backgrounded · cafe0001" ;;
@@ -62,6 +67,8 @@ class Rig:
         reg = {"sessionId": sid, "pid": os.getpid(), "kind": "bg", "status": status, "statusUpdatedAt": int(time.time() * 1000),
                "jobId": job, "cwd": str(self.dir), "startedAt": int(time.time() * 1000) - 60_000}
         (self.config / "sessions" / f"{job}.json").write_text(json.dumps(reg))
+        (self.config / "jobs" / job).mkdir(parents=True, exist_ok=True)  # what a viewer reads before attaching again
+        (self.config / "jobs" / job / "state.json").write_text(json.dumps({"sessionId": sid, "state": "working"}))
         records = [{"type": "user", "timestamp": "2026-10-08T19:00:00.000Z", "cwd": str(self.dir), "message": {"content": prompt}},
                    {"type": "assistant", "timestamp": "2026-10-08T19:00:05.000Z", "message": {"content": [{"type": "text", "text": "Done."}]}}]
         (self.config / "projects" / "-test" / f"{sid}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))

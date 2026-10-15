@@ -1,7 +1,8 @@
 """The list app, headless, with tmux, the claude CLI, the state file and the session reader faked.
 
 Nothing here reaches a real tmux server or a real session: every tmux call is recorded, and a tiny
-fake keeps the two bits of tmux state the app reads back (the zoom flag and the live pane's @ap_want).
+fake keeps the bits of tmux state the app reads back: the zoom flag and the viewers (which job each pane shows,
+and which one is on the right side; decision 0006).
 """
 
 import subprocess
@@ -19,7 +20,9 @@ class FakeTmux:
     def __init__(self):
         self.calls = []
         self.zoomed = False
-        self.options = {"@ap_want": ""}
+        self.viewers = {"welcome": "%2"}  # job -> pane id
+        self.slot_job = "welcome"  # the job on the right side
+        self.made = 10
 
     def __call__(self, *args):
         self.calls.append(args)
@@ -36,18 +39,28 @@ class FakeTmux:
 
     def run(self, command):
         name = command[0] if command else ""
-        if name == "list-panes":
+        if name == "list-panes" and "-a" not in command:
             return "".join(f"{pid} {role}\n" for role, pid in PANES.items())
         if name == "resize-pane" and "-Z" in command:
             self.zoomed = not self.zoomed
-        if name == "set-option" and "-p" in command and command[-2] == "@ap_want":
-            self.options["@ap_want"] = command[-1]
+        if name in ("new-window", "new-session") and "-P" in command:
+            self.made += 1
+            return f"%{self.made}\n"
+        if name == "set-option" and "-p" in command and command[-2] == "@ap_job":
+            self.viewers[command[-1]] = command[command.index("-t") + 1]
+        if name == "swap-pane":
+            moved = command[command.index("-s") + 1]
+            self.slot_job = next((job for job, pane in self.viewers.items() if pane == moved), self.slot_job)
+        if name == "list-panes" and "-a" in command:
+            return "".join(f"{tmuxctl.SESSION if job == self.slot_job else tmuxctl.VIEWERS}\t"
+                           f"{'cockpit' if job == self.slot_job else 'v'}\t{pane}\tlive\t{job}\t0\t\n"
+                           for job, pane in self.viewers.items())
         if name == "display-message":
             fmt = command[-1]
             if fmt == "#{window_zoomed_flag}":
                 return "1\n" if self.zoomed else "0\n"
-            if fmt == "#{@ap_want}":
-                return self.options["@ap_want"] + "\n"
+            if fmt == "#{@ap_job}":
+                return self.slot_job + "\n"
             if fmt == "#{pane_pid}":
                 return "\n"  # no real process to signal
         return ""

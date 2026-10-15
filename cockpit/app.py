@@ -17,11 +17,12 @@ from textual.widgets import Static
 
 from . import __version__, model, sessions, store, tmuxctl, view
 from .dialogs import CSS as DIALOG_CSS
-from .dialogs import Find, NewSession, Note, ThemePicker, TypeInto, help_lines
+from .dialogs import Dialog, Find, NewSession, Note, ThemePicker, TypeInto, help_lines
 from .theme import PALETTES, install
 
 IN_TMUX = bool(os.environ.get("TMUX"))
 PAST = {"stop": "stopped", "remove": "removed"}
+KEY = {"stop": "S", "remove": "X"}  # "remove" starts with R, which is rename (the drift audit)
 
 # ---------------------------------------------------------------- the list
 
@@ -35,6 +36,19 @@ class CardText(Static):
         at = event.get_content_offset(self)
         if at:
             self.screen.clicked(at.y, event.chain)
+
+
+def where_it_is(row):
+    """What the right side says about a session it can't show (F6)."""
+    if row["jobId"] and row["state"] == "stopped":
+        return f"{row['name']} is stopped. Enter brings it back."
+    if row["jobId"]:
+        return f"{row['name']} isn't running right now. Enter starts it again where it left off."
+    if row["alive"] and row["tmux"]:
+        return f"{row['name']} is open in another tmux window. Enter switches there."
+    if row["alive"]:
+        return f"{row['name']} is open in a terminal tab outside tmux. Switch to that tab to use it."
+    return f"{row['name']} has ended. Enter brings it back in the background."
 
 
 class ListHeader(Static):
@@ -61,8 +75,9 @@ class ListScreen(Screen):
         Binding("R", "rename", show=False),
         Binding("slash", "find", show=False),
         Binding("w", "watch", show=False),
-        Binding("s", "twice('stop')", show=False),
-        Binding("x", "twice('remove')", show=False),
+        # capitals, pressed twice: typing a reply while the keys are still here can't stop or delete a session (F3)
+        Binding("S", "twice('stop')", show=False),
+        Binding("X", "twice('remove')", show=False),
         Binding("e", "quiet", show=False),
         Binding("t", "look", show=False),
         Binding("u", "usage", show=False),
@@ -78,7 +93,8 @@ class ListScreen(Screen):
         self.watcher = sessions.Watcher()
         self.rows, self.order, self.sids = [], [], []
         self.selected = self.live = self.pending = None
-        self.asked_for = "?"  # what the tmux thread last asked the live pane for; "?" until it first reads it
+        self.slot = "?"  # what the tmux thread last saw (or asked for) on the right side; "?" until it first reads it
+        self.ticks = 0
         self.show_quiet, self.frame, self.armed, self.armed_at = False, 0, None, 0.0
         self.dim = False  # while he's typing to Claude, the list steps back
         self.switch_timer, self.published, self.warning, self.checked, self.drawn = None, None, "", 0.0, None
@@ -136,20 +152,23 @@ class ListScreen(Screen):
                     self.background(tmuxctl.ensure_alert)
             self.app.call_from_thread(self.apply, rows)
             if IN_TMUX:
-                self.background(self.read_live)
+                self.background(self.read_slot)
+                self.ticks += 1
+                if self.ticks % 5 == 0:
+                    self.background(tmuxctl.tidy, {r["jobId"] for r in rows if r["jobId"]})
         except Exception as e:
             self.warning = f"can't read sessions: {e}"
             self.app.call_from_thread(self.redraw)
         finally:
             self.snapping.release()
 
-    def read_live(self):
-        """What the live pane shows. It runs on the tmux thread, after any switch the list queued, so its
-        answer is never stale; a change it didn't ask for came from the welcome box, `yolo "prompt"` or Ctrl+Z."""
-        want = tmuxctl.wanted() or None
-        if want != self.asked_for:
-            self.asked_for = want
-            self.app.call_from_thread(self.went_live, want)
+    def read_slot(self):
+        """What the right side shows. It runs on the tmux thread after any switch the list queued, so it's never stale;
+        a change it didn't ask for came from the welcome screen (it started a session) or `yolo "prompt"`."""
+        job = tmuxctl.showing()
+        if job and job != self.slot:
+            self.slot = job
+            self.app.call_from_thread(self.went_live, None if job == "welcome" else job)
 
     def went_live(self, job):
         self.live = job
@@ -182,8 +201,11 @@ class ListScreen(Screen):
         if not self.row(self.selected):
             shown, _ = model.visible(rows, self.order, self.show_quiet, None)
             live_row = self.row_by_job(self.live)
-            if was_at is not None and shown:  # it was removed: the card that slid into its place
+            if was_at is not None and shown:  # it was removed: the card that slid into its place, shown on the right too
                 self.selected = shown[min(was_at, len(shown) - 1)]["sid"]
+                if self.dim and IN_TMUX:  # he was typing in the one that went: the keys come back, not to its neighbour
+                    self.background(tmuxctl.focus, "list")
+                self.follow_soon()
             else:
                 self.selected = live_row["sid"] if live_row else shown[0]["sid"] if shown else None
         self.redraw()
@@ -297,37 +319,69 @@ class ListScreen(Screen):
         if sid != self.selected:
             self.selected = sid
             self.redraw()
-            if self.switch_timer:
-                self.switch_timer.stop()
-            self.switch_timer = self.set_timer(0.3, self.follow)
+            self.follow_soon()
         self.reveal()  # also when it's the card it's on: g on the first card after scrolling away brings it back
 
-    def follow(self):
-        """The live pane follows the selection to any running background session."""
-        row = self.row(self.selected)
-        if IN_TMUX and row and row["jobId"] and row["alive"] and row["jobId"] != self.live:
-            self.show(row["jobId"])
+    def follow_soon(self):
+        if self.switch_timer:
+            self.switch_timer.stop()
+        self.switch_timer = self.set_timer(0.12, self.follow)  # a short settle while he runs through the list
 
-    def show(self, job):
+    def follow(self):
+        """The right side always shows the cursor's card (F6): its viewer, or a note when it can't be shown here.
+        Only a running session gets a viewer: an attach would start a stopped or sleeping one just because the
+        cursor passed it (the v4 review). Enter or a click starts it on purpose."""
+        row = self.row(self.selected)
+        if not IN_TMUX or not row:
+            return
+        if row["jobId"] and row["alive"]:
+            if row["jobId"] != self.live:
+                self.show(row["jobId"])
+        else:
+            self.note(where_it_is(row))
+
+    def show(self, job, fresh=False):
         self.live = job
         self.point_at(job)
-        self.background(self.ask_live, job)
+        self.background(self.put_on_right, job, fresh)
         self.redraw()
         self.reveal()
 
-    def ask_live(self, job):
-        self.asked_for = job  # on the tmux thread, so read_live can't see the old answer after this
-        tmuxctl.show_live(job)
+    def put_on_right(self, job, fresh):
+        self.slot = job  # on the tmux thread, so read_slot can't see the old answer after this
+        tmuxctl.view(job, fresh=fresh)
+
+    def note(self, text):
+        """The welcome screen on the right, saying where a session it can't show is."""
+        self.live = None
+        self.redraw()
+        self.background(self.put_note, text)
+
+    def put_note(self, text):
+        self.slot = "welcome"
+        tmuxctl.view("welcome")
+        tmuxctl.set_note(text)
 
     def clicked(self, line, chain):
         if not 0 <= line < len(self.sids):
             return
-        if self.sids[line]:
-            self.select(self.sids[line])
-            if chain >= 2:
+        if self.sids[line]:  # one click opens it: on the right, with the keys (F2), like any chat app
+            if self.switch_timer:
+                self.switch_timer.stop()
+            self.selected = self.sids[line]
+            self.redraw()
+            self.reveal()
+            row = self.row(self.selected)
+            if row and row["jobId"]:
                 self.action_open()
+            else:
+                self.follow()
         elif line == len(self.sids) - 1 and (self.show_quiet or model.visible(self.rows, self.order, False, self.selected)[1]):
             self.action_quiet()  # the "N idle sessions hidden" line (not the last box's border when there's no such line)
+
+    def on_key(self, event: events.Key):
+        if event.key not in ("S", "X"):
+            self.armed = None  # S and X count only back to back, so "So Sam" typed here by mistake stops nothing (F3)
 
     def action_move(self, delta):
         sids = self.card_sids()
@@ -345,8 +399,7 @@ class ListScreen(Screen):
         if not row or not IN_TMUX:
             return
         if row["jobId"]:
-            if row["jobId"] != self.live:
-                self.show(row["jobId"])
+            self.show(row["jobId"], fresh=True)  # fresh: a stopped or stuck viewer starts over; attach brings it back
             self.background(tmuxctl.focus, "live")
         elif row["alive"] and row["tmux"]:
             self.background(tmuxctl.jump, row["tmux"])
@@ -457,21 +510,14 @@ class ListScreen(Screen):
 
     @work(thread=True, exit_on_error=False, group="usage")
     def action_usage(self):
-        """His kill rule: over two weeks, open it on at least half the days with 2+ sessions running, or delete it."""
+        """How often he opens it: of the last two weeks' days with 2+ sessions running, how many he opened it on."""
         started = date.fromisoformat(min(self.state["opens"]))
         since = max(started, date.today() - timedelta(days=13)).isoformat()
         busy = {d for d in sessions.busy_days(14) if d >= since}
         hit = busy & set(self.state["opens"])
         p = self.palette
-        if date.today() - started < timedelta(days=14):
-            verdict, color = f"Too early to judge: the two weeks end {(started + timedelta(days=14)):%a %-m/%-d}.", p.text2
-        elif len(hit) < len(busy) / 2:
-            verdict, color = "That's under half: your rule says delete it, not redesign it.", p.fail
-        else:
-            verdict, color = "Your kill rule isn't triggered.", p.done
         lines = [Text.assemble(("Busy days", p.text), (f" (2+ sessions) since {since}: ", p.text2), (str(len(busy)), p.work)),
-                 Text.assemble(("Opened the cockpit on ", p.text2), (str(len(hit)), p.done), (" of them.", p.text2)),
-                 Text(""), Text(verdict, style=f"bold {color}")]
+                 Text.assemble(("Opened the cockpit on ", p.text2), (str(len(hit)), p.done), (" of them.", p.text2))]
         self.app.call_from_thread(self.dialog, Note("how often you use this", lines), lambda _: None)
 
     # ------------------------------------------------ managing
@@ -498,14 +544,14 @@ class ListScreen(Screen):
             self.app.notify(f"Only background sessions can be {PAST[what]} from here.", title=row["name"])
             return
         if what == "stop" and not row["alive"]:
-            self.app.notify("It isn't running. Press x twice to remove it.", title=row["name"])
+            self.app.notify("It isn't running. Press X twice to remove it.", title=row["name"])
             return
         if self.armed == (what, row["sid"]) and time.time() - self.armed_at < 2:
             self.armed = None
             self.manage(what, row)
         else:
             self.armed, self.armed_at = (what, row["sid"]), time.time()
-            self.app.notify(f"Press {what[0]} again to {what} it." + (" Its chat is kept." if what == "stop" else " This can't be undone."),
+            self.app.notify(f"Press {KEY[what]} again to {what} it." + (" Its chat is kept." if what == "stop" else " This can't be undone."),
                             title=row["name"], timeout=2)
 
     @work(thread=True, exit_on_error=False, group="manage")
@@ -540,14 +586,14 @@ class ListScreen(Screen):
         if keep and name != self.state["theme"]:
             self.state["theme"] = name
             store.save(self.state)
-            if IN_TMUX and not self.live:
-                self.background(tmuxctl.show_live, "")  # the welcome screen reads the saved theme when it starts
 
 
 
 class CockpitApp(App):
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [Binding("ctrl+q", "leave", show=False, priority=True), Binding("ctrl+c", "noop", show=False, priority=True)]
+    NOTIFICATION_TIMEOUT = 3  # out of the way sooner (F2)
+    # Ctrl+C closes the dashboard like q does (F4), or the dialog that's open; Claude's own Ctrl+C lives on the right side
+    BINDINGS = [Binding("ctrl+q,ctrl+c", "close", show=False, priority=True)]
     # the terminal paints the background (decision 0002); cards and dialogs carry their own
     CSS = """
     Screen { background: ansi_default; }
@@ -559,6 +605,7 @@ class CockpitApp(App):
     FindLine:hover { text-style: underline; }
     /* the list's width, so it doesn't wrap; a thin rounded line like every other box, not the "done" green bar */
     Toast { background: $surface; width: 100%; max-width: 100%; padding: 0 1; border: round $ap-line; }
+    ToastRack { dock: top; align: right top; }  /* at the bottom they covered the last cards and ate clicks (F2) */
     Toast.-information { border: round $ap-line; }
     Toast.-warning { border: round $warning; }
     Toast.-error { border: round $error; }
@@ -585,7 +632,14 @@ class CockpitApp(App):
         self.push_screen(screen)
 
     def action_leave(self):
-        tmuxctl.detach() if IN_TMUX else self.exit()
+        """Close the dashboard; every session keeps running."""
+        if IN_TMUX:
+            self.screen_stack[1].background(tmuxctl.leave)
+        else:
+            self.exit()
 
-    def action_noop(self):
-        pass
+    def action_close(self):
+        if isinstance(self.screen, Dialog):
+            self.screen.action_close()
+        else:
+            self.action_leave()

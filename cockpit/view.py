@@ -9,6 +9,8 @@ he's typing to Claude. The boxes are thin rounded lines with their name in the t
 screen's box (Pepe, 2026-10-08: "real nice, nice and thin, should be in more places but obv not spammed").
 """
 
+import textwrap
+
 from rich.text import Text
 
 from . import model
@@ -54,7 +56,7 @@ def line(row, p: Palette, width, now, frame, *, selected, live, watched, dim=Fal
     No fill unless the cursor is on it, so the finished ones sit back and the space goes to what's still moving.
     """
     cursor = selected and not dim
-    bg = p.sel if cursor else None
+    bg = p.sel if selected else None  # the cursor's line is the session on the right, so it stays lit while he types there
     proj = model.project_color(row["cwd"])
     if dim:
         proj = mix(proj, p.base, 0.5)
@@ -64,8 +66,6 @@ def line(row, p: Palette, width, now, frame, *, selected, live, watched, dim=Fal
         right.append(("◉ ", p.work))
     if not row["jobId"] and row["alive"]:
         right.append(("↗ ", p.text3))
-    if live:
-        right.append(("showing ▸ ", p.key))
     right.append((model.row_age(row, now) + " ", p.text3))
     room = width - 4 - len(row["name"]) - sum(len(text) for text, _ in right) - 2
     said = model.second_line(row)
@@ -76,11 +76,13 @@ def line(row, p: Palette, width, now, frame, *, selected, live, watched, dim=Fal
 
 
 def card(row, p: Palette, width, now, frame, *, selected, live, watched, dim=False):
-    waiting = row["state"] == "needs"  # waiting for him right now: its text pulses orange, even while the list is dimmed
-    cursor = selected and not dim
-    bg = p.sel if cursor else p.card
+    """A session that needs a look (waiting, asking, failed, working): its name and for how long, then what it wants
+    or what it's doing, in words. v4 (F7, F8): the whole question and its choices; no folder, no context %, no "showing"."""
+    state = row["state"]
+    waiting = state == "needs"  # waiting for him right now: its text pulses orange, even while the list is dimmed
+    bg = p.sel if selected else p.card  # the cursor's card is the one on the right, so it stays lit while he types there
     ink = attention(p, bg, frame) if waiting else p.text2 if dim else p.text
-    soft = ink if waiting else p.text3 if dim or row["band"] == 4 else p.text2
+    soft = ink if waiting else p.text3 if dim else p.text2
     proj = model.project_color(row["cwd"])
     if dim:
         proj = mix(proj, p.base, 0.5)
@@ -92,21 +94,39 @@ def card(row, p: Palette, width, now, frame, *, selected, live, watched, dim=Fal
     if not row["jobId"] and row["alive"]:
         flags.append(("↗ ", soft))  # a chat in some other window: it can't be shown here
     age = model.row_age(row, now)
-    room = width - 4 - len(row["name"]) - sum(len(text) for text, _ in flags) - len(age) - 2
-    where = "  " + row["where"] if row["where"] and len(row["where"]) + 2 <= room else ""  # whole or not at all, never ".cl…"
-    first = bar(bg, [stripe, (" ", ""), (mark + " ", mark_color), (row["name"], f"bold {ink}" if cursor or waiting else ink),
-                     (where, mix(proj, bg, 0.25))],
-                [(" ", ""), *flags, (age + " ", soft)], width)  # a gap, so a long name is cut ("…") before it touches the age
-    right = []
-    if live:
-        right.append(("showing ▸", p.key))
-    elif model.ctx_pct(row) >= 80:
-        right.append((f"context {model.ctx_pct(row)}% full", p.quiet))
-    if right:  # a gap, so a cut-off summary doesn't run into it ("hea…context")
-        right.insert(0, ("  ", ""))
-    second = bar(bg, [stripe, ("   ", ""), (model.second_line(row) or " ", p.fail if row["state"] == "failed" else soft)],
-                 [*right, (" ", "")], width)
-    return [first, second]
+    label = {"needs": f"waiting {age}", "asks": f"asked {age} ago", "failed": f"failed {age} ago"}.get(state, age)
+    name_style = f"bold {ink}" if waiting or (selected and not dim) else ink
+    lines = [bar(bg, [stripe, (" ", ""), (mark + " ", mark_color), (row["name"], name_style)],
+                 [(" ", ""), *flags, (label + " ", soft)], width)]  # a gap, so a long name is cut ("…") before the age
+    for text, color in body(row, p, width - 5, age, soft):  # the stripe, the indent and the right margin
+        lines.append(bar(bg, [stripe, ("   ", ""), (text, color)], [(" ", "")], width))
+    return lines
+
+
+def body(row, p: Palette, room, age, soft):
+    """The lines under a card's name: (text, color) pairs."""
+    state = row["state"]
+    said = model.second_line(row) or ""
+    if state in ("needs", "asks"):
+        out = [(line, soft) for line in wrap(said, room, 3)]
+        if row["options"]:
+            choices = "  ".join(f"{n} {label}" for n, label in enumerate(row["options"], 1))
+            out.append((choices if len(choices) <= room else choices[: room - 1] + "…", soft))
+        return out or [(" ", soft)]
+    if state == "failed":
+        return [(line, p.fail) for line in wrap(said, room, 2)] or [(" ", p.fail)]
+    if state == "quiet":
+        return [(f"no output for {age}", p.quiet)]
+    return [(wrap(said, room, 1)[0] if said else " ", soft)]
+
+
+def wrap(text, room, most):
+    """Up to `most` lines of `room` characters; the last one ends in "…" when the text goes on."""
+    lines = textwrap.wrap(text, room) or []
+    if len(lines) > most:
+        lines = lines[:most]
+        lines[-1] = lines[-1][: room - 1].rstrip() + "…"
+    return lines
 
 
 def box_top(title, style, p: Palette, width):
@@ -168,7 +188,7 @@ def render(rows, order, p: Palette, width, now, frame, *, selected, live, watche
             add(box_top(model.BAND_LABEL[row["band"]], colors[row["band"]] if not dim else p.text3, p, width))
             last_band = row["band"]
         elif not brief:
-            add(box_side(bar(None, [], [], inner), p))  # a blank row between two-line cards
+            add(box_side(bar(None, [], [], inner), p), row["sid"])  # a blank row between cards: a click there opens the one below (F2)
         draw = line if brief else card
         for drawn in draw(row, p, inner, now, frame, selected=row["sid"] == selected, live=bool(live) and row["jobId"] == live,
                           watched=row["sid"] in watched, dim=dim):

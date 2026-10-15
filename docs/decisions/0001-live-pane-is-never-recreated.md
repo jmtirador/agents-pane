@@ -1,6 +1,6 @@
 # 1. The live pane is never re-created
 
-Status: accepted, 2026-10-07 (recorded 2026-10-08)
+Status: accepted, 2026-10-07 (recorded 2026-10-08); the live.py supervisor below was replaced by warm viewers in decision 0006 (2026-10-14), and the rule against `respawn-pane` stands
 
 ## Context
 

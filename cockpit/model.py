@@ -9,8 +9,6 @@ import os
 from .sessions import home_rel, short_cwd
 from .theme import HOME_COLOR, PROJECT_COLORS, SPARE_COLORS
 
-COMPACT_AT = 970_000  # his three auto-compactions fired at 966,885 / 968,068 / 972,520
-
 BAND = {"needs": 1, "asks": 1, "failed": 1, "working": 2, "quiet": 2, "done": 3, "idle": 4, "stopped": 4}
 BAND_LABEL = {1: "Waiting for you", 2: "Working", 3: "Done", 4: "Idle"}
 GLYPH = {"needs": "?", "asks": "?", "failed": "✗", "working": "●", "quiet": "●", "done": "✓", "idle": "∙", "stopped": "○"}
@@ -100,6 +98,24 @@ def row_age(row, now):
     return age(row.get("finishedAt") or row["lastChange"], now)
 
 
+# what a tool call means, in words (v4, F8: a card said "SendUserFile")
+TOOL_DOING = {"Bash": "running:", "Read": "reading", "Edit": "editing", "MultiEdit": "editing", "Write": "writing",
+              "NotebookEdit": "editing", "Grep": "searching for", "Glob": "looking for", "WebSearch": "searching the web for",
+              "WebFetch": "reading", "Task": "running a helper agent:", "Agent": "running a helper agent:", "Skill": "using the skill"}
+TOOL_ALONE = {"TodoWrite": "updating its to-do list", "TaskCreate": "updating its to-do list", "TaskUpdate": "updating its to-do list",
+              "AskUserQuestion": "asking you a question", "SendUserFile": "sending you a file", "ExitPlanMode": "finishing its plan"}
+
+
+def describe(tool, what):
+    """One tool call as words: "reading app.py", "running: the tests", "using gmail: search"."""
+    if tool in TOOL_ALONE:
+        return TOOL_ALONE[tool]
+    verb = TOOL_DOING.get(tool)
+    if verb:
+        return f"{verb} {what}" if what else verb.rstrip(":")
+    return f"using {tool}: {what}" if what else f"using {tool}"
+
+
 def second_line(row):
     """What the card says under the name: the question, the live activity, or where it left off."""
     if row["state"] in ("needs", "asks"):
@@ -111,9 +127,5 @@ def second_line(row):
         detail = row["detail"]
         if detail.startswith(("/", "~/")):  # a bare file path says less than its name
             detail = os.path.basename(detail.rstrip("/")).replace("\\ ", " ")
-        return detail or (f"{last['tool']} {last['what']}" if last else "thinking")
+        return detail or (describe(last["tool"], last["what"]) if last else "thinking")
     return row["away"] or row["itSaid"] or row["detail"] or row["lastPrompt"]
-
-
-def ctx_pct(row):
-    return round(row["ctx"] / COMPACT_AT * 100) if row.get("ctx") else 0

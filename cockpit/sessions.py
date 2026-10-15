@@ -25,7 +25,6 @@ QUIET_AFTER_S = 600  # working with no file change for 10 minutes
 DONE_FOR_S = 30 * 60  # a finished session stays "done" (ice) for 30 minutes
 ASKS_FOR_S = 24 * 3600  # a soft question counts for a day
 TAIL_BYTES = 65_536
-TAIL_FALLBACK_BYTES = 262_144
 HEAD_BYTES = 65_536
 STEPS_KEPT = 40
 
@@ -253,15 +252,12 @@ def first_title_anywhere(path):
 
 def read_tail(path, size):
     """Everything a row and its preview need, from the end of the transcript."""
-    info = parse_tail(read_jsonl_bytes(path, max(0, size - TAIL_BYTES), size))
-    if info["ctx"] is None and size > TAIL_BYTES:
-        info["ctx"] = parse_tail(read_jsonl_bytes(path, max(0, size - TAIL_FALLBACK_BYTES), size))["ctx"]
-    return info
+    return parse_tail(read_jsonl_bytes(path, max(0, size - TAIL_BYTES), size))
 
 
 def parse_tail(recs):
     info = {"lastPrompt": "", "lastPromptAt": None, "lastTurnAt": None, "lastTextAt": None, "awaySummary": "", "awaySummaryAt": None,
-            "ctx": None, "error": "", "steps": [], "pendingAsk": None, "mode": "", "customTitle": ""}
+            "error": "", "steps": [], "pendingAsk": None, "mode": "", "customTitle": ""}
     last_text = ""
     open_asks = {}
     for rec in recs:
@@ -286,8 +282,6 @@ def parse_tail(recs):
                 info["lastPrompt"], info["lastPromptAt"], info["steps"] = one_line(message_text(rec)), at, []
         elif kind == "assistant" and not rec.get("isSidechain"):
             msg = rec.get("message") or {}
-            if msg.get("usage"):
-                info["ctx"] = sum(msg["usage"].get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
             # failed means the newest assistant record is an API error; anything after it clears it
             info["error"] = one_line(message_text(rec), 200) if rec.get("isApiErrorMessage") else ""
             for b in msg.get("content") if isinstance(msg.get("content"), list) else []:
@@ -413,7 +407,6 @@ class Watcher:
             "away": t["awaySummary"] if (t["awaySummaryAt"] or 0) >= (t["lastTextAt"] or 0) else "",
             "error": t["error"],
             "steps": t["steps"],
-            "ctx": t["ctx"],
             "mode": t["mode"],
             "tmux": reg.get("tmux"),
         }
@@ -511,7 +504,7 @@ def search(query, limit=20):
 
 
 def busy_days(days):
-    """His local days in the last N with messages in two or more sessions (the kill rule's `u` compares them
+    """His local days in the last N with messages in two or more sessions (`u` compares them
     with the local days the cockpit was opened). Timestamps are UTC, so each hour is turned into a local day."""
     since = time.time() - days * 86400
     recent = [p for p in transcripts() if os.path.getmtime(p) >= since]

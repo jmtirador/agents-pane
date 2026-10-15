@@ -1,14 +1,16 @@
-"""Everything the cockpit asks of tmux and the claude CLI: the live pane, the look, the bars, messages.
+"""Everything the cockpit asks of tmux and the claude CLI: the viewers, the look, the bars, messages.
 
-The cockpit is one tmux window, agents:cockpit, with two panes the launcher tags with a pane option:
-@ap_role=list runs the session list, @ap_role=live runs cockpit/live.py (Claude Code or the welcome screen).
+The cockpit is one tmux window, agents:cockpit: the list on the left (@ap_role=list) and, on the right, whichever
+viewer is showing. A viewer is a pane running cockpit/viewer.py for one session (or the welcome screen); hidden
+viewers wait in a separate session, agents-viewers, and showing one swaps it in (decision 0006). Every viewer is
+tagged @ap_role=live and @ap_job=<job or "welcome">, and the tags move with the pane.
 """
 
 import os
 import re
 import shlex
-import signal
 import subprocess
+import sys
 import time
 
 from .theme import Palette
@@ -18,6 +20,10 @@ WINDOW = f"{SESSION}:cockpit"
 # set-option reads -t as a pane, where a bare "agents" can match a window named "agents…" in whatever session
 # runs the command; "=agents:" is exactly this session (and "=agents" where -t is a session)
 OPTS = f"={SESSION}:"
+VIEWERS = f"{SESSION}-viewers"  # hidden viewers live here, out of reach of next-window and the status bar
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+KEEP_WARM = 4  # hidden viewers kept attached; one idle `claude attach` measured 144 MB and no CPU
+WARM_FOR_S = 15 * 60  # a hidden viewer not shown for this long is closed
 LIST_WIDTH = 42
 ALERT = "#{S:#{@ap_alert}}"  # the needs-you chip lives on the agents session, so it vanishes with it
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -25,9 +31,9 @@ EMPTY_PROMPT = re.compile(r"^❯\s*$", re.M)
 
 # The bottom bar, one set per side: (key shown, what it does, the key a click sends to the list).
 # A click on "ctrl+]" sends F12 (a "]" can't go in a click range's name), which the list maps to the same switch.
-LIST_KEYS = [("↑↓", "pick", "Down"), ("enter", "open", "Enter"), ("tab", "go to Claude", "Tab"), ("n", "new", "n"),
-             ("/", "find", "/"), ("t", "theme", "t"), ("?", "all keys", "?")]
-CLAUDE_KEYS = [("ctrl+]", "back to your sessions", "F12")]
+LIST_KEYS = [("↑↓", "pick", "Down"), ("enter", "open", "Enter"), ("n", "new", "n"), ("/", "find", "/"), ("t", "theme", "t"),
+             ("?", "all keys", "?"), ("q", "close", "q")]
+CLAUDE_KEYS = [("ctrl+]", "back to your sessions", "F12"), ("", "close", "q")]
 
 
 def tmux(*args):
@@ -70,23 +76,103 @@ def set_pane_option(pane_id, name, value):
         tmux("set-option", "-p", "-t", pane_id, name, value)
 
 
-def show_live(job_id):
-    """Ask the live pane to show a background session ('' for the welcome screen); see cockpit/live.py."""
-    live = pane("live")
-    if not live:
-        return False
-    asked = batch([("set-option", "-p", "-t", live, "@ap_want", job_id), ("display-message", "-p", "-t", live, "#{pane_pid}")])
-    try:
-        os.kill(int(asked.stdout.strip()), signal.SIGUSR1)
-    except (ValueError, OSError):
-        return False
-    return True
+def viewers():
+    """{job: (pane id, "slot" or "hidden", shown at, parked)} for every viewer, read from tmux each time: never from
+    the list's memory, which a crash or a second list would get wrong (decision 0006)."""
+    found = {}
+    fmt = "#{session_name}\t#{window_name}\t#{pane_id}\t#{@ap_role}\t#{@ap_job}\t#{@ap_shown}\t#{@ap_parked}"
+    for line in tmux("list-panes", "-a", "-F", fmt).stdout.splitlines():
+        session, window, pane_id, role, job, shown, parked = (line.split("\t") + [""] * 7)[:7]
+        if role == "live" and job and session in (SESSION, VIEWERS):
+            where = "slot" if session == SESSION and window == "cockpit" else "hidden"
+            if found.get(job, ("", ""))[1] != "slot":  # a copy waiting to be closed never hides the right side
+                found[job] = (pane_id, where, int(shown or 0), parked == "1")
+    return found
 
 
-def wanted():
-    """The session the live pane was last asked to show ('' for the welcome screen). Every switch writes it:
-    the list, the welcome box, `yolo "prompt"`, and live.py itself when he leaves a session."""
-    return pane_option(pane("live"), "@ap_want")
+def slot():
+    """The viewer on the right side, (its job, its pane id), or ("", "") when there is none. Found by window, never
+    by position: while a dialog zooms the list, tmux's {right} is the list itself (the v4 stress test)."""
+    return next(((job, v[0]) for job, v in viewers().items() if v[1] == "slot"), ("", ""))
+
+
+def showing():
+    """The job on the right side ("welcome" for the welcome screen), or "" when it can't be read."""
+    return slot()[0]
+
+
+def viewer_command(job):
+    return (f"cd {shlex.quote(ROOT)} && exec env PYTHONPATH={shlex.quote(ROOT)} ESCDELAY=20 "
+            f"{shlex.quote(sys.executable)} -m cockpit.viewer {shlex.quote(job)}")
+
+
+def spawn(job):
+    """A new hidden viewer for a job; its pane id, or "" when tmux refused."""
+    command = viewer_command(job)
+    if tmux("has-session", "-t", f"={VIEWERS}").returncode == 0:
+        made = tmux("new-window", "-d", "-P", "-F", "#{pane_id}", "-t", f"={VIEWERS}:", command)
+    else:
+        made = tmux("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", VIEWERS, "-x", "200", "-y", "50",
+                    "-e", f"AGENTS_PANE_SESSION={SESSION}", "-e", "CLAUDE_CODE_TMUX_TRUECOLOR=1", "-e", "COLORTERM=truecolor", command)
+    pane_id = made.stdout.strip()
+    if pane_id:
+        batch([("set-option", "-p", "-t", pane_id, "@ap_role", "live"), ("set-option", "-p", "-t", pane_id, "@ap_job", job)])
+    return pane_id
+
+
+def view(job, fresh=False):
+    """Show a session (or "welcome") on the right: swap its warm viewer in, or start one (decision 0006).
+
+    fresh: start a parked viewer over (Enter on a stopped session brings it back); the parked one is closed once
+    it's out of the cockpit window, since close() never touches the right side.
+    """
+    found = viewers()
+    old = next((v[0] for v in found.values() if v[1] == "slot"), "")
+    if not old:
+        return False  # the right side isn't a viewer (it died): {right} would be the list, and a swap would hide it
+    pane_id, where, _, parked = found.get(job, ("", "", 0, False))
+    if where == "slot" and not (fresh and parked):
+        return True
+    stale = pane_id if fresh and parked else ""
+    if not pane_id or stale:
+        pane_id = spawn(job)
+        if not pane_id:
+            return False
+    now = str(int(time.time()))  # a viewer stays warm for WARM_FOR_S after he last saw it, so both ends are stamped
+    swapped = batch([("swap-pane", "-Z", "-d", "-s", pane_id, "-t", old),  # -Z: an open dialog keeps the whole window
+                     ("set-option", "-p", "-t", pane_id, "@ap_shown", now),
+                     ("set-option", "-p", "-t", old, "@ap_shown", now)])
+    if stale:
+        close(stale)
+    return not swapped.returncode
+
+
+def set_note(text):
+    """The welcome screen's line on the right ("" for its usual one)."""
+    welcome = viewers().get("welcome", ("",))[0]
+    if welcome:
+        tmux("set-option", "-p", "-t", welcome, "@ap_note", text)
+
+
+def close(pane_id):
+    """Close a viewer, but never the one on the right side: a race could have swapped it in (decision 0006)."""
+    tmux("if-shell", "-F", "-t", pane_id, "#{!=:#{window_name},cockpit}", f"kill-pane -t {pane_id}")
+
+
+def tidy(jobs):
+    """Close hidden viewers he won't need: sessions that are gone, parked ones, ones not shown for a while, and any
+    past the few kept warm. jobs: the background sessions the list still shows."""
+    now = time.time()
+    hidden = sorted(((shown, job, pane_id, parked) for job, (pane_id, where, shown, parked) in viewers().items()
+                     if where == "hidden" and job != "welcome"), reverse=True)
+    for rank, (shown, job, pane_id, parked) in enumerate(hidden):
+        if job not in jobs or parked or now - shown > WARM_FOR_S or rank >= KEEP_WARM:
+            close(pane_id)
+
+
+def close_hidden():
+    """Every hidden viewer, when he closes the dashboard; the one on the right stays for next time."""
+    tmux("kill-session", "-t", f"={VIEWERS}")
 
 
 def zoom(on):
@@ -103,9 +189,16 @@ def zoom(on):
 
 
 def focus(role):
-    target = pane(role)
+    """Give one side the keys. The right side's pane id changes with every swap, so it's looked up each time; it
+    doesn't take them while a dialog is open, because select-pane on it would un-zoom the dialog (the re-review)."""
+    if role == "list":
+        target = pane("list")
+        if target:
+            tmux("select-pane", "-t", target)
+        return
+    target = slot()[1]
     if target:
-        tmux("select-pane", "-t", target)
+        tmux("if-shell", "-F", "-t", target, "#{?#{||:#{window_zoomed_flag},#{@ap_dialog}},0,1}", f"select-pane -t {target}")
 
 
 def flip():
@@ -118,8 +211,12 @@ def jump(target):
     return tmux("switch-client", "-t", target).returncode == 0
 
 
-def detach():
-    tmux("detach-client", "-s", SESSION)
+def leave():
+    """Close the dashboard for the client looking at it: back to the tmux session it came from (yolo run inside
+    tmux switches into the dashboard), else out of tmux. Every session keeps running."""
+    close_hidden()
+    if tmux("switch-client", "-l").returncode:
+        tmux("detach-client")
 
 
 def launch_folder():
@@ -129,7 +226,8 @@ def launch_folder():
 
 def key_bar(p: Palette, keys):
     """Keys as quiet text, the key in the look's key color and what it does in gray; clicking one presses it in the list."""
-    return " " + "   ".join(f"#[range=user|ap-{send}]#[fg={p.key}]{key} #[fg={p.text3}]{what}#[norange]" for key, what, send in keys)
+    return " " + "   ".join(f"#[range=user|ap-{send}]" + (f"#[fg={p.key}]{key} " if key else "") + f"#[fg={p.text3}]{what}#[norange]"
+                               for key, what, send in keys)
 
 
 def side_bar(p: Palette):
@@ -198,6 +296,8 @@ def bind_keys():
         ("bind-key", "-n", "MouseDown1Status", "if-shell", "-F", "#{m:ap-*,#{mouse_status_range}}", click, "switch-client -t ="),
         # not while a dialog has zoomed the list: resizing a pane unzooms the window
         ("set-hook", "-w", "-t", WINDOW, "window-resized", f"if-shell -F '#{{window_zoomed_flag}}' '' 'resize-pane -t {list_pane} -x {LIST_WIDTH}'"),
+        # closing the terminal (not q) also frees the hidden viewers; quoted: tmux runs hooks through his zsh
+        ("set-hook", "-t", OPTS, "client-detached", f"run-shell -b \"tmux kill-session -t '={VIEWERS}' 2>/dev/null; true\""),
         ("resize-pane", "-t", list_pane, "-x", str(LIST_WIDTH)),
     ])
 
@@ -278,3 +378,10 @@ def type_into(job_id, text):
         return True
     finally:
         tmux("kill-pane", "-t", hidden)
+        # a second client at another size garbles the viewer on the right until it repaints: nudge it (decision 0006),
+        # unless a dialog has the whole window, which a resize would squeeze back into the list (the v4 review)
+        list_pane = pane("list")
+        if list_pane:
+            unzoomed = "#{!=:#{window_zoomed_flag},1}"
+            batch([("if-shell", "-F", "-t", list_pane, unzoomed, f"resize-pane -t {list_pane} -x {width}")
+                   for width in (LIST_WIDTH + 1, LIST_WIDTH)])

@@ -6,7 +6,7 @@ from cockpit import store
 
 
 def test_a_preview_cockpit_keeps_its_own_memory(monkeypatch):
-    # a preview must not count toward the kill rule, or change the real cockpit's theme or watches
+    # a preview must not count toward his usage days, or change the real cockpit's theme or watches
     monkeypatch.setenv("AGENTS_PANE_SESSION", "agents-preview")
     preview = importlib.reload(store).PATH
     monkeypatch.setenv("AGENTS_PANE_SESSION", "agents")

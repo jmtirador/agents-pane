@@ -37,6 +37,9 @@ TIPS = [  # each fits on one line of the 64-column box
 ]
 
 
+TAG = "Pick a session on the left, or start a new one here."
+
+
 def wordmark(p, width):
     """AGENTS in block letters, fading from the theme's own color to its key color; a small mark when the pane is narrow."""
     if width < len(MARK[0]) + 4:
@@ -96,7 +99,7 @@ class Welcome(App):
         p = self.palette
         with Vertical(id="all"):
             yield Mark()
-            yield Static("Pick a session on the left, or start a new one here.", id="tag")
+            yield Static(TAG, id="tag")
             with Vertical(id="box") as box:
                 box.border_title = "new session"
                 yield Input(placeholder="what should it do?")
@@ -108,6 +111,19 @@ class Welcome(App):
         install(self, self.palette)
         self.where(f"in {sessions.tilde(self.folder)}")
         self.query_one(Input).focus()
+        if os.environ.get("TMUX_PANE"):
+            self.set_interval(0.5, self.read_note)
+
+    def read_note(self):
+        """The list's note for a card it can't show here (a chat in another terminal), in place of the usual line (F6)."""
+        note = tmuxctl.pane_option(os.environ["TMUX_PANE"], "@ap_note")
+        self.query_one("#tag", Static).update(note or TAG)
+        p = current()
+        if p.name != self.palette.name:  # he picked another theme in the list: this screen stays running, so follow it
+            self.palette = p
+            self.theme = p.theme_name
+            self.query_one(Mark).refresh()
+            self.query_one("#keys", Static).update(keys_line(p))
 
     def where(self, text, style=None):
         self.query_one("#where", Static).update(Text(text, style=style or ""))
@@ -137,11 +153,5 @@ class Welcome(App):
         pass
 
 
-def main():
-    job = Welcome().run()
-    if job:  # cockpit/live.py, which ran this screen, shows the new session next
-        tmuxctl.set_pane_option(os.environ.get("TMUX_PANE"), "@ap_want", job)
-
-
 if __name__ == "__main__":
-    main()
+    Welcome().run()  # on its own, for a look; in the cockpit it runs inside cockpit/viewer.py

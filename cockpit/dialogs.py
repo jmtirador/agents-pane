@@ -47,7 +47,7 @@ def help_lines(p, version):
     """The full key list for `?`, grouped, in the current theme's colors."""
     groups = {
         "Moving around": [
-            ("↑ ↓  j k", "pick a session; the right side shows it if it's running"),
+            ("↑ ↓  j k", "pick a session; the right side shows it"),
             ("g G", "jump to the top or the bottom"),
             ("enter", "open it on the right and type to it (a stopped one starts again)"),
             ("tab", "go to the Claude side"),
@@ -61,12 +61,12 @@ def help_lines(p, version):
         ],
         "Managing": [
             ("R", "rename it"),
-            ("s", "stop it (press twice; its chat is kept)"),
-            ("x", "remove it for good (press twice)"),
+            ("S", "stop it (capital S, twice; its chat is kept)"),
+            ("X", "remove it for good (capital X, twice)"),
             ("e", "show or hide idle sessions"),
             ("t", f"change the theme (now {p.label})"),
             ("u", "how often you've used this"),
-            ("q", "leave; everything keeps running"),
+            ("q", "close the dashboard (or ctrl+c); everything keeps running"),
         ],
     }
     lines = []
@@ -74,7 +74,7 @@ def help_lines(p, version):
         lines.append(Text(group, style=f"bold {p.text}"))
         lines += [Text.assemble((key.ljust(10), p.key), (what, p.text2)) for key, what in keys]
         lines.append(Text(""))
-    lines.append(Text("On the Claude side: ctrl+z puts the session away; ctrl+c twice opens Claude's own list.", style=p.text3))
+    lines.append(Text("On the Claude side: ctrl+c twice or ctrl+z brings you back here; it keeps running.", style=p.text3))
     lines.append(Text(f"agents-pane {version}", style=p.text3))
     return lines
 

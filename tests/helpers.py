@@ -9,5 +9,5 @@ def row(sid, state="idle", **extra):
     base = {"sid": sid, "jobId": sid[:8], "kind": "bg", "alive": True, "state": state, "name": sid,
             "cwd": os.path.expanduser("~/Projects/finch"), "where": "finch", "startedAt": NOW - 60_000, "turnStart": NOW - 30_000,
             "finishedAt": None, "lastChange": NOW - 10_000, "question": "", "options": [], "detail": "", "lastPrompt": "",
-            "itSaid": "", "away": "", "error": "", "steps": [], "ctx": 0, "mode": "", "tmux": None}
+            "itSaid": "", "away": "", "error": "", "steps": [], "mode": "", "tmux": None}
     return {**base, **extra}

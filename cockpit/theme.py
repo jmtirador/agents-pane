@@ -5,7 +5,7 @@ quiet gray, and color is for meaning. Each look has one loud color, used only fo
 the looks change accents, never the background. `base` is a hex copy of his terminal's gray (#282c34,
 Ghostty's default), used only to blend card and dim colors, because Textual can't blend an ANSI color.
 
-Textual is imported only where a Textual app needs it, so cockpit/live.py starts without it.
+Textual is imported only where a Textual app needs it, so a viewer (cockpit/viewer.py) for a session starts without it.
 """
 
 from dataclasses import dataclass
@@ -26,8 +26,8 @@ class Palette:
     work: str
     done: str
     fail: str
-    quiet: str  # working but silent for a while, and "context nearly full"
-    key: str  # key letters in the bar and in hints, and the "showing" mark
+    quiet: str  # working but silent for a while
+    key: str  # key letters in the bar and in hints
     needs: str = ATTENTION  # the one loud color: only a session waiting for him (its text pulses), never a fill
     base: str = BASE
     card: str = "#2c313c"  # a card, one step up from the terminal's gray
