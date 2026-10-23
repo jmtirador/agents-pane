@@ -44,6 +44,10 @@ class Looks(unittest.TestCase):
     def test_ages_read_short(self):
         self.assertEqual([model.age(NOW - s * 1000, NOW) for s in (5, 90, 7200, 5 * 86400)], ["5s", "1m", "2h", "5d"])
 
+    def test_the_tools_he_sees_most_are_in_words(self):  # G4: "using SendMessage" was the second most common step
+        for tool in ("SendMessage", "ToolSearch", "TaskStop", "Artifact", "Monitor", "ListAgents", "CronCreate", "EnterWorktree"):
+            self.assertNotIn(tool, model.describe(tool, ""), tool)
+
     def test_mix_goes_from_one_color_to_the_other(self):
         self.assertEqual(view.mix("#000000", "#ffffff", 0), "#000000")
         self.assertEqual(view.mix("#000000", "#ffffff", 1), "#ffffff")

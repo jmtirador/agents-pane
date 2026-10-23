@@ -98,12 +98,38 @@ def row_age(row, now):
     return age(row.get("finishedAt") or row["lastChange"], now)
 
 
+STATE_WORD = {"working": "working for", "quiet": "quiet for", "done": "finished", "idle": "last active", "stopped": "stopped"}
+
+
+def label(row, now):
+    """How long, in words: "waiting 4m", "asked 4m ago", "failed 4m ago", else the plain age."""
+    when = row_age(row, now)
+    return {"needs": f"waiting {when}", "asks": f"asked {when} ago", "failed": f"failed {when} ago"}.get(row["state"], when)
+
+
+def long_label(row, now):
+    """The same with its state named, for the peek's header: "finished 2h ago", "last active 3d ago"."""
+    if row["state"] in ("needs", "asks", "failed"):
+        return label(row, now)
+    word, when = STATE_WORD.get(row["state"], "last active"), row_age(row, now)
+    return f"{word} {when}" if row["state"] in ("working", "quiet") else f"{word} {when} ago"
+
+
 # what a tool call means, in words (v4, F8: a card said "SendUserFile")
 TOOL_DOING = {"Bash": "running:", "Read": "reading", "Edit": "editing", "MultiEdit": "editing", "Write": "writing",
               "NotebookEdit": "editing", "Grep": "searching for", "Glob": "looking for", "WebSearch": "searching the web for",
               "WebFetch": "reading", "Task": "running a helper agent:", "Agent": "running a helper agent:", "Skill": "using the skill"}
 TOOL_ALONE = {"TodoWrite": "updating its to-do list", "TaskCreate": "updating its to-do list", "TaskUpdate": "updating its to-do list",
-              "AskUserQuestion": "asking you a question", "SendUserFile": "sending you a file", "ExitPlanMode": "finishing its plan"}
+              "AskUserQuestion": "asking you a question", "SendUserFile": "sending you a file", "ExitPlanMode": "finishing its plan",
+              # the ones his sessions use most that read as code (G4: "using SendMessage" was his second most common step)
+              "SendMessage": "messaging another session", "ToolSearch": "loading tools", "TaskStop": "stopping a background task",
+              "TaskList": "checking its tasks", "TaskGet": "checking its tasks", "TaskOutput": "checking its tasks",
+              "Artifact": "publishing a page", "ArtifactData": "updating a page's data", "Monitor": "watching a process",
+              "ListAgents": "looking at other sessions", "EnterWorktree": "opening a worktree", "ExitWorktree": "leaving its worktree",
+              "ReadNotifications": "reading its notifications", "CronCreate": "scheduling a check", "CronDelete": "removing a schedule",
+              "CronList": "checking its schedules", "ScheduleWakeup": "scheduling its next check", "RemoteTrigger": "starting a remote task",
+              "PushNotification": "sending you a notification"}
+PULSE_FOR_MS = 2 * 3600_000  # a session waiting longer than this stays orange but stops pulsing: orange means now (G11)
 
 
 def describe(tool, what):
@@ -114,6 +140,13 @@ def describe(tool, what):
     if verb:
         return f"{verb} {what}" if what else verb.rstrip(":")
     return f"using {tool}: {what}" if what else f"using {tool}"
+
+
+def pulses(row, now):
+    """The working dot pulses; a waiting card pulses until it has waited two hours."""
+    if row["state"] == "working":
+        return True
+    return row["state"] == "needs" and now - (row.get("finishedAt") or row["lastChange"]) < PULSE_FOR_MS
 
 
 def second_line(row):

@@ -207,6 +207,20 @@ def test_a_wrapped_question_loses_no_letters():  # the v4 review: lines were wra
     assert "…" not in body and "today" in body
 
 
+def test_a_session_waiting_for_hours_stops_pulsing():  # G11: orange should mean now
+    fresh = row("n3", "needs", name="ship it", question="Ship it?", finishedAt=NOW - 10 * 60_000, lastChange=NOW - 10 * 60_000)
+    stale = row("n4", "needs", name="ship it", question="Ship it?", finishedAt=NOW - 3 * 3600_000, lastChange=NOW - 3 * 3600_000)
+    frames = lambda r: [str(view.card({**r, "band": 1}, NEON, 41, NOW, f, selected=False, live=False, watched=False)[1].spans) for f in (0, 1)]  # noqa: E731
+    assert frames(fresh)[0] != frames(fresh)[1]
+    assert frames(stale)[0] == frames(stale)[1]
+
+
+def test_a_working_card_shows_two_lines_of_what_it_does():  # G13: "Finding his messages about the…"
+    detail = "finding his messages about the dashboard from the last week across all projects"
+    lines = plain_card(row("w6", "working", name="search", detail=detail))
+    assert "dashboard from the last week" in lines[2]
+
+
 def test_cards_drop_the_noise():  # F8: folder text, "showing ▸" and the context warning
     r = row("w3", "working", name="api work", where="finch/web", detail="writing the handler")
     text = " ".join(plain_card(r, selected=True))

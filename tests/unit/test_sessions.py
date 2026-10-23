@@ -38,7 +38,24 @@ class RuleA(unittest.TestCase):
         self.assertEqual(ap.asks_question(text), "Tea or coffee?")
 
 
+class Words(unittest.TestCase):
+    def test_a_one_word_first_sentence_takes_the_next_one_too(self):  # G5: "Done." says nothing
+        self.assertEqual(ap.first_sentence("Done. The fix is in and the tests pass. Then more."), "Done. The fix is in and the tests pass.")
+        self.assertEqual(ap.first_sentence("All the tests pass now. Then more."), "All the tests pass now.")
+
+    def test_server_names_stay_whole(self):  # G4: "using ccd_sessio: dismiss_task"
+        self.assertEqual(ap.tool_step({"name": "mcp__finch-browser__take_screenshot", "input": {}})[0], "finch-browser")
+        self.assertEqual(ap.tool_step({"name": "mcp__plugin_posthog_posthog__query", "input": {}})[0], "posthog")
+        self.assertEqual(ap.tool_step({"name": "mcp__fb5c1d77-2ac5-42bb-a8e0-0698ad75eec7__send", "input": {}})[0], "send")
+
+
 class Tail(unittest.TestCase):
+    def test_the_last_tool_call_with_no_result_is_pending(self):  # G2
+        call = assistant(tools=[("Bash", {"description": "Read the log"})])
+        self.assertEqual(ap.parse_tail([call])["pendingTool"], ("Bash", "Read the log"))
+        answered = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t0"}]}}
+        self.assertIsNone(ap.parse_tail([call, answered])["pendingTool"])
+
     def test_unanswered_ask_is_pending_and_an_answer_clears_it(self):
         ask = assistant(tools=[("AskUserQuestion", {"questions": [{"question": "Tea or coffee?", "options": [{"label": "Tea"}, {"label": "Coffee"}]}]})])
         pending = ap.parse_tail([ask])["pendingAsk"]
@@ -100,6 +117,26 @@ class States(unittest.TestCase):
 
     def test_the_name_is_his_title_then_the_auto_title(self):
         self.assertEqual(self.row(self.reg("idle"))["name"], "Ledger fix")
+
+    def test_a_permission_prompt_says_what_it_wants_to_do(self):  # G2: "waiting 44h" over a blank line
+        recs = [assistant(tools=[("Bash", {"command": "ssh box tail deploy.log", "description": "Read the deploy log on the server"})])]
+        row = self.row(self.reg("waiting", waitingFor="permission prompt"), recs=recs)
+        self.assertEqual((row["state"], row["question"]), ("needs", "wants to run: Read the deploy log on the server"))
+
+    def test_a_waiting_chat_with_no_tool_call_shows_the_question_it_ended_on(self):  # G2
+        recs = [assistant("The draft is ready.\n\nShould I send it to the whole list now?")]
+        self.assertEqual(self.row(self.reg("waiting"), recs=recs)["question"], "Should I send it to the whole list now?")
+
+    def test_a_chat_in_the_claude_app_is_marked_as_one(self):  # G3
+        self.assertTrue(self.row(self.reg("idle", entrypoint="claude-desktop"))["desktop"])
+        self.assertFalse(self.row(self.reg("idle", entrypoint="cli"))["desktop"])
+
+    def test_the_name_is_claude_codes_own_unless_he_renamed_it(self):  # G6: two names for one session
+        self.assertEqual(self.row(self.reg("idle", name="ledger cleanup"))["name"], "ledger cleanup")
+        self.assertEqual(self.row(self.reg("idle"), {"state": "done", "name": "ledger v2"})["name"], "ledger v2")
+        renamed = [{"type": "custom-title", "customTitle": "my ledger"}]
+        self.assertEqual(self.row(self.reg("idle", name="ledger cleanup"), recs=renamed)["name"], "my ledger")
+        self.assertEqual(self.row(self.reg("idle", name="s1", jobId="s1"))["name"], "Ledger fix")  # an id is not a name
 
     def test_spare_workers_are_hidden(self):
         self.assertIsNone(self.row(self.reg("idle", spare=True)))

@@ -1,9 +1,23 @@
-# agents-pane spec (the cockpit; v2 2026-10-06, v3 2026-10-08, v4 2026-10-14)
+# agents-pane spec (the cockpit; v2 2026-10-06, v3 2026-10-08, v4 2026-10-14, v4.1 2026-10-22)
 
 The single source of truth for the build.
 Every review and the drift audit check against this file.
 v1 was a docked side pane inside one chat; Pepe rejected it on 2026-10-06 ("no color", "not bold", "just a side pane", "wrap Claude Code").
 On the plan page he picked: shape A (full-screen cockpit), the Neon look, and all twelve features.
+
+## v4.1 (2026-10-22)
+
+A week after v4 Pepe said it "doesnt seem to be taht good" and asked for more bugs, slowdowns and improvements.
+Three read-only agents worked on his real data: a bug hunter rendered every card against his files, a profiler measured his live dashboard and his 6.4 GB of transcripts, and a UX adversary walked his day against Claude Code's agent view and three other tools.
+The finding that mattered: 17 of his 20 sessions weren't running, and for those the right side showed only the logo; v4's speed work served the other 3.
+`docs/problems.md` (G1-G13) holds each problem and its check; a design critic attacked the plan before the build.
+
+- The right side peeks at any session it can't attach: what he asked, its last reply, its recap, the keys that work (decision 0007).
+- Find runs on a small index of only the searchable text: 15-300 ms instead of 5-14 s, and the list stays small (decision 0008).
+- Cards say what his real sessions are doing: what a permission prompt wants, tools in words, Claude Code's own names, two lines for a working card.
+- One arrow press switches at once; nothing pulses while nobody is looking.
+
+**Not doing without his say.** A "Left open" band for sessions that ended on a question at any age, number keys that answer a question's choices from the list, and a pin that keeps a session attached.
 
 ## v4 (2026-10-14)
 
@@ -59,6 +73,7 @@ Contract: the glyph is what a file proves, the order is who needs you first, the
 - Boxes mean "a group": single cards, the idle line, the find line and the Claude side are never boxed.
 - The bottom bar is quiet text, never chips: each key in the theme's key color and what it does in gray, three spaces apart, and the clock on the right; the only bold is `N waiting for you` on the Claude side.
 - In the list the bar says `↑↓ pick   enter open   n new   / find   t theme   ? all keys   q close`; on the Claude side it says `ctrl+] back to your sessions   close`, plus `N waiting for you` on the right when anything waits.
+- A double or triple click in the cockpit goes straight to the app (tmux's own selects the pane first, which took the keys back from the session a click had just opened); elsewhere they do what tmux does.
 - Every key in the bar is clickable; a click presses that key in the list (`ctrl+]` sends F12, because a `]` can't be in a click range name, and the Claude side's `close` sends `q`).
 - The list's last row is ` / find an old session`, which opens find when clicked.
 - While Claude has the keys the list dims: the header and band titles go gray, nothing is bold except the waiting card and the header's waiting count, project colors fade halfway to the background; a waiting card keeps pulsing, and the cursor's card keeps its lighter background, since it is the session on the right.
@@ -73,14 +88,17 @@ Contract: the glyph is what a file proves, the order is who needs you first, the
 - Showing a session swaps its viewer into the right side with `swap-pane -Z -d`; a session with no viewer yet gets one first.
   Hidden viewers wait in a detached tmux session, `<session>-viewers`, out of reach of `next-window` and the status bar.
 - The right side is the viewer in the cockpit window, read from tmux each time (never `{right}`, which is the list itself while a dialog zooms it), and its `@ap_job` is the one record of what it shows; the list reads it on the same thread that sends its own swaps, and a change it didn't ask for makes the list follow.
-- The cursor's card is always what the right side shows, 0.12 s after the cursor settles, also when the cursor moves because a card went away; a session it can't show (a chat in another tmux window or terminal tab, an ended chat, or a background session that isn't running) puts the welcome screen there with a line saying where that session is or that Enter starts it.
+- The cursor's card is always what the right side shows: at once for a single move, 0.12 s after a run of moves settles (or when it would start a new viewer), also from the first screen and when the cursor moves because a card went away.
+- A session it can't attach (a background session whose process isn't running, a chat in another tmux window, terminal tab or the Claude app, an ended chat) gets a peek instead (decision 0007): its name in its project's color, its state and age ("finished 2h ago", "waiting 44h"), its folder, the question and choices it waits on, what it's doing now, "You asked" (the last prompt), "It said" (the last reply as rendered Markdown, cut to fit), its recap, where it is, and only the keys that work for it (`enter start it again here`, `r reply`, `enter switch there`, none for the Claude app). Nothing starts or attaches.
 - When he leaves a session from inside Claude (Ctrl+C twice, `←` or `/exit` turn the attach into Claude's own session list, `claude agents`; Ctrl+Z ends it), the viewer closes what's left, attaches the same session again and gives the keys back to the list; a session that was stopped or removed, or an attach that keeps failing, leaves the viewer parked with a short message instead.
 - A viewer never ends on its own: any error parks it with a message, because a closed right side would leave the list alone in the window.
 - The right side takes the keys only while no dialog is open (tmux checks the zoom and `@ap_dialog` itself), so a session that starts under a dialog shows without un-zooming it.
 - At most 4 hidden viewers stay warm, one he hasn't seen for 15 minutes is closed, and closing the dashboard closes them all (`client-detached`).
 - A cockpit from before 4.0.0 is rebuilt the next time `yolo` runs.
 - A pane is closed only when it isn't in the cockpit window, so a race can't close the right side.
-- The welcome screen is the viewer `welcome`: the AGENTS wordmark fading from the theme's own color to the key color (kept on purpose: he called it "awesome"), a line saying "Pick a session on the left, or start a new one here." (or where the cursor's session is), a box titled `new session` that starts one in the folder `yolo` was run from and attaches it in place, the two keys that matter in words, and one tip a day.
+- The peek is drawn by the viewer `welcome` from a file the list writes (`store.write_peek`), checked with a stat 20 times a second; it has no input: typing shows a hint and does nothing, Enter or `r` pressed on their own act on the card through the list, and Esc, Tab or an arrow give the keys back. Swapping a running session in blanks the peek behind it.
+- If the right side ever dies, the next switch builds a new one beside the list (`split-window`; nothing is re-created in place).
+- The welcome screen proper, shown only when there's no card to peek at, is the same viewer: the AGENTS wordmark fading from the theme's own color to the key color (kept on purpose: he called it "awesome"), a line saying "Pick a session on the left, or start a new one here." (or where the cursor's session is), a box titled `new session` that starts one in the folder `yolo` was run from and attaches it in place, the two keys that matter in words, and one tip a day.
 
 ## Data (measured 2026-10-06)
 
@@ -89,7 +107,7 @@ Contract: the glyph is what a file proves, the order is who needs you first, the
 | `~/.claude/sessions/<pid>.json` | registry: sessionId, cwd, startedAt, kind, status (idle, busy, waiting, shell), statusUpdatedAt, tmux pane, spare | cached by mtime |
 | `~/.claude/jobs/<id>/state.json` | background jobs: state, tempo, the live `detail` line, intent, updatedAt | cached by mtime |
 | the last 64 KB of each transcript | permission mode, last prompt, its own title, recap, last reply, steps, pending AskUserQuestion, API errors | read only when the file changed |
-| `rg -i -F` over `~/.claude/projects` | search, kept to typed prompts, titles (his own too), recaps and replies | 0.2-0.4 s |
+| find's index, `~/.claude/agents-pane/search/` (decision 0008) | one line per typed prompt, title (his own too), recap and reply, per session, and the byte offset read so far | first build ~5 s, then new bytes only; a search 15-300 ms |
 | `claude agents --json` | a guard against Claude Code changing its files, run every 30 s only while no live session is visible | 0.1 s |
 
 The list takes a snapshot every second in a worker thread.
@@ -122,7 +140,10 @@ When the selected session disappears, the card that slid into its place is selec
 - Waiting, asking, failed and working sessions get a card on a background one step lighter than the terminal (#2c313c on #282c34), with a blank row between cards where the terminal shows through; a click on that row opens the card below it.
 - Done and idle sessions get one line each with no fill and no gaps (design B, his pick on 2026-10-09): stripe, mark, name, a few words of the recap if they fit (never a lone `…`), the watch mark `◉` and `↗` like a card, and the age.
 - The first line: a stripe in the project's color, the glyph, the name, the watch mark `◉`, `↗` for a chat in some other window, and on the right how long: `waiting 4m` (needs you), `asked 4m ago`, `failed 4m ago`, or the plain age.
-- Under it: the whole question on up to 3 lines and its numbered choices on one more (needs you, asks), the error on up to 2 lines (failed), `no output for 12m` (quiet), else one line of what it's doing in words ("editing app.py", "running tests"; a bare file path shows its file name), the recap, the reply's first sentence or the last prompt.
+- Under it: the whole question on up to 3 lines and its numbered choices on one more (needs you, asks), the error on up to 2 lines (failed), `no output for 12m` (quiet), up to two lines of what it's doing in words (working: "editing app.py", "messaging another session"; a bare file path shows its file name), else the recap, the reply's first sentence (two when the first is under three words) or the last prompt.
+- A session waiting on a permission prompt says what it wants ("wants to run: read the deploy log"), from the last tool call with no result; one waiting with no tool call shows the question it ended on.
+- A waiting card stops pulsing after two hours and stays orange; nothing pulses while no client is attached.
+- The name is his rename, else Claude Code's own (the job's or registry's, what its footer and agent view say), else the first auto title.
 - No folder, no `showing` mark and no context warning (v4, F8): the cursor's highlight already marks what's on the right, and the folder's color is the stripe.
 - Bold is only for the cursor card's name and the waiting card; the cursor card (or line) sits on a lighter background (#3a4150) instead of a different color, also while the list is dimmed.
 - A session waiting for him has no fill (he asked for "something more minimal" than the solid pink card): its `?`, name and question are orange #ff7b00 in every theme and pulse each spinner frame. Orange appears nowhere else on the list except the `Waiting for you` title, the header's count, and the `?` of a session that asked something.
@@ -132,7 +153,7 @@ When the selected session disappears, the card that slid into its place is selec
 
 ## Keys
 
-- `↑↓` or `j k` move, `g G` jump to the ends; the right side shows the cursor's session 0.12 s after the cursor settles.
+- `↑↓` or `j k` move, `g G` jump to the ends; the right side shows the cursor's session at once, or 0.12 s after a run of moves settles.
 - One click on a card opens it: on the right, with the keys (a chat it can't show gets the note); a click on the idle line toggles it, the find line opens find, and every key in the bar presses that key in the list.
 - Enter opens: a background session goes on the right and gets the keys (a stopped one comes back through `claude attach`); a chat in another tmux pane is switched to; an ended session is resumed in the background and shown.
 - Tab in the list always moves the keys to the Claude side; Ctrl+] anywhere in the cockpit switches sides once per press, and does nothing while a dialog is open.
@@ -144,7 +165,8 @@ When the selected session disappears, the card that slid into its place is selec
 
 ## Search
 
-`/` searches as you type (from two characters, 0.35 s after the last key); ↓ moves into the results and Enter opens one.
+`/` searches as you type (from two characters, 0.2 s after the last key), on an index the list brings up to date in its own process when it starts and before each search (decision 0008); while the first build runs, results say they may be partial.
+↓ moves into the results and Enter opens one.
 Results list the date, the name, the folder and the matching line, newest first, up to 30 sessions.
 A running session is opened, never resumed a second time; anything else is resumed in the background and shown live.
 The same search ships as `bin/find-session` (top 20, with the `claude --resume` line for each).
@@ -198,6 +220,8 @@ The key color is never the waiting orange, so a key never reads as "waiting for 
 - Claude Code stops a finished or waiting session's process after about an hour with nothing attached, and the next attach boots it again; a warm viewer keeps it attached.
 - One idle `claude attach` takes about 144 MB and no CPU.
 - A tmux client started from inside tmux needs `env -u TMUX`, or it nests in the current session.
+- A Textual app gives focus back to the first focusable widget, even a hidden one, so a view without input needs a focusable container of its own.
+- His transcripts: 2115 files, 6.4 GB on 2026-10-22, most of it tool output; the last typed prompt sits a median 240 KB from the end, Claude's own `last-prompt` record always in the last 64 KB.
 - Textual 8.2.8 notices a lone Esc only when its input loop wakes, every 0.1 s, so `ESCDELAY` alone changed nothing (163 ms either way).
 - While a window is zoomed, tmux's `{right}` is the zoomed pane itself.
 - `claude attach`: `←`, `/exit` and Ctrl+C twice turn the process into `claude agents` in place; only Ctrl+Z exits.

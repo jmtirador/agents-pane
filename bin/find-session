@@ -5,7 +5,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
-from cockpit.sessions import search  # noqa: E402
+from cockpit.search import find  # noqa: E402
 
-for hit in search(" ".join(sys.argv[1:])) if sys.argv[1:] else sys.exit(__doc__):
+for hit in find(" ".join(sys.argv[1:])) if sys.argv[1:] else sys.exit(__doc__):
     print(f"{hit['date']:>5}  {hit['name']}\n       {hit['snippet']}\n       claude --resume {hit['sid']}\n")

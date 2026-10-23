@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read Claude Code's own session files and describe every session as a row.
 
-Used by the cockpit (a snapshot a second) and by bin/find-session (search).
+Used by the cockpit (a snapshot a second); cockpit/search.py builds find's index from the same files.
 Read-only: it never writes a Claude Code file and never touches a session.
 """
 
@@ -36,6 +36,9 @@ OFFER = re.compile(
 GREETING = re.compile(r"^(hey|hi|ok|okay|so|yo|pls|please|can you|could you)\b[\s,]*", re.I)
 NOISE_PROMPT = re.compile(r"^(<|Caveat|This session is being continued|\[Request interrupted)")
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# what a session stuck on a permission prompt wants to do, by tool (G2)
+PERMIT = {"Bash": "run", "Edit": "edit", "MultiEdit": "edit", "Write": "write", "NotebookEdit": "edit", "Read": "read", "WebFetch": "open"}
 
 
 # ---------------------------------------------------------------- reading
@@ -141,7 +144,18 @@ def strip_markdown(text):
 
 
 def first_sentence(text, limit=240):
-    return one_line(SENTENCE_END.split(strip_markdown(text).strip(), maxsplit=1)[0], limit)
+    """The reply's first sentence, or its first two when the first is under three words: "Done." says nothing (G5)."""
+    parts = SENTENCE_END.split(strip_markdown(text).strip(), maxsplit=2)
+    first = " ".join(parts[:2]) if len(parts[0].split()) < 3 else parts[0]
+    return one_line(first, limit)
+
+
+def ends_on_question(text):
+    """The last sentence of the last paragraph when it ends in "?", offers included."""
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", strip_markdown(text)) if p.strip()]
+    paragraphs = [p for p in paragraphs if not p.lower().startswith("shortcut hack")]
+    final = SENTENCE_END.split(paragraphs[-1])[-1].strip() if paragraphs else ""
+    return one_line(final, 300) if final.endswith("?") else None
 
 
 def asks_question(text):
@@ -149,14 +163,8 @@ def asks_question(text):
 
     Measured on 111 real endings: 3 hits, all real. "Ends with ?" was 70% false.
     """
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", strip_markdown(text)) if p.strip()]
-    paragraphs = [p for p in paragraphs if not p.lower().startswith("shortcut hack")]
-    if not paragraphs:
-        return None
-    final = SENTENCE_END.split(paragraphs[-1])[-1].strip()
-    if not final.endswith("?") or OFFER.match(final.lstrip("-*• ")):
-        return None
-    return one_line(final, 300)
+    final = ends_on_question(text)
+    return None if not final or OFFER.match(final.lstrip("-*• ")) else final
 
 
 def display_name(head, path):
@@ -197,7 +205,10 @@ def tool_step(block):
     inp = block.get("input") or {}
     if name.startswith("mcp__"):
         _, server, tool = (name.split("__", 2) + ["", ""])[:3]
-        return server.replace("claude_ai_", "")[:10], tool
+        server = server.replace("claude_ai_", "")
+        if server.startswith("plugin_"):  # plugin_<plugin>_<server>
+            server = server.rsplit("_", 1)[-1]
+        return (server, tool) if not UUID.match(server) else (tool, "")  # whole: the card cuts with "…" itself (G4)
     if name in TOOL_WHAT:
         what = inp.get(TOOL_WHAT[name], "")
         what = short_path(what) if TOOL_WHAT[name] == "file_path" else what
@@ -257,9 +268,9 @@ def read_tail(path, size):
 
 def parse_tail(recs):
     info = {"lastPrompt": "", "lastPromptAt": None, "lastTurnAt": None, "lastTextAt": None, "awaySummary": "", "awaySummaryAt": None,
-            "error": "", "steps": [], "pendingAsk": None, "mode": "", "customTitle": ""}
+            "error": "", "steps": [], "pendingAsk": None, "pendingTool": None, "mode": "", "customTitle": "", "endsOn": None}
     last_text = ""
-    open_asks = {}
+    open_asks, open_tools = {}, {}
     for rec in recs:
         kind = rec.get("type")
         at = iso_ms(rec.get("timestamp"))
@@ -276,6 +287,7 @@ def parse_tail(recs):
             results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"] if isinstance(content, list) else []
             for b in results:
                 open_asks.pop(b.get("tool_use_id"), None)
+                open_tools.pop(b.get("tool_use_id"), None)
             if not results and not rec.get("isMeta"):
                 info["lastTurnAt"] = at  # a prompt, a peer message or a task notification starts a turn
             if is_typed_prompt(rec):
@@ -288,13 +300,16 @@ def parse_tail(recs):
                 if isinstance(b, dict) and b.get("type") == "tool_use":
                     name, what = tool_step(b)
                     info["steps"].append({"clock": local_time(at, "%H:%M"), "tool": name, "what": what})
+                    open_tools[b.get("id")] = (name, what)
                     if name == "AskUserQuestion":
                         open_asks[b.get("id")] = ask_from_input(b.get("input") or {})
             if message_text(rec).strip():
                 last_text, info["lastTextAt"] = message_text(rec), at
     info["pendingAsk"] = list(open_asks.values())[-1] if open_asks else None
+    info["pendingTool"] = list(open_tools.values())[-1] if open_tools else None
     info["steps"] = info["steps"][-STEPS_KEPT:]
     info["itSaid"], info["asked"] = first_sentence(last_text), asks_question(last_text)  # once per change, not per tick
+    info["endsOn"] = ends_on_question(last_text)  # a waiting session waits on its last question, an offer too (G2)
     return info
 
 
@@ -353,7 +368,9 @@ class Watcher:
         st, t, path = self.transcript_info(sid, job.get("linkScanPath"))
         head = self.heads[sid][1] if sid in self.heads else read_head("")
         t = t or parse_tail([])
-        name = one_line(t["customTitle"], 80) or (display_name(head, path) if path else "")
+        own = lambda n: n if n and n not in (sid, sid[:8], job.get("_id"), reg.get("jobId")) else ""  # noqa: E731 (an id is not a name)
+        # his rename, then Claude Code's own name (what its footer and agent view say), then the first auto title (G6)
+        name = one_line(t["customTitle"] or own(job.get("name")) or own(reg.get("name")), 80) or (display_name(head, path) if path else "")
         name = name or " ".join(GREETING.sub("", one_line(job.get("intent") or t["lastPrompt"], 200)).split()[:5])
         if not name:
             return None  # nothing typed yet: a warm spare or an empty chat
@@ -385,6 +402,8 @@ class Watcher:
             elif now - finished <= DONE_FOR_S * 1000:
                 state = "done"
 
+        if state == "needs" and not question:
+            question = waiting_for(t)
         cwd = reg.get("cwd") or job.get("cwd") or ""
         return {
             "sid": sid,
@@ -409,7 +428,34 @@ class Watcher:
             "steps": t["steps"],
             "mode": t["mode"],
             "tmux": reg.get("tmux"),
+            "desktop": reg.get("entrypoint") == "claude-desktop",  # a chat in the Claude app (G3)
+            "path": path,
         }
+
+
+REPLY_BYTES = 262_144  # the last reply is always within this on his transcripts (the v4.1 design critic: 147 KB at most)
+
+
+def last_reply(path):
+    """The last thing it said, in full, for the peek: the newest assistant text in the transcript's last 256 KB."""
+    try:
+        size = os.path.getsize(path)
+    except (OSError, TypeError):
+        return ""
+    text = ""
+    for rec in read_jsonl_bytes(path, max(0, size - REPLY_BYTES), size):
+        if rec.get("type") == "assistant" and not rec.get("isSidechain") and message_text(rec).strip():
+            text = message_text(rec)
+    return text
+
+
+def waiting_for(t):
+    """What a session waiting with no question wants: the tool call it's asking permission for, else the question it ended on (G2)."""
+    if t["pendingTool"]:
+        tool, what = t["pendingTool"]
+        verb = f"wants to {PERMIT[tool]}" if tool in PERMIT else f"wants to use {tool}"
+        return f"{verb}: {what}" if what else verb
+    return t["endsOn"] or t["itSaid"]
 
 
 def live_registry():
@@ -440,22 +486,6 @@ def registry_warning(rows):
 # ---------------------------------------------------------------- search
 
 
-def searchable_text(rec):
-    """The text a search may match: prompts, titles (his own too), recaps and replies, never tool output."""
-    kind = rec.get("type")
-    if kind == "ai-title":
-        return rec.get("aiTitle", "")
-    if kind == "custom-title":
-        return rec.get("customTitle", "")
-    if kind == "last-prompt":
-        return rec.get("lastPrompt", "")
-    if kind == "system" and rec.get("subtype") == "away_summary":
-        return rec.get("content", "")
-    if (kind == "user" and is_typed_prompt(rec)) or (kind == "assistant" and not rec.get("isSidechain")):
-        return message_text(rec)
-    return ""
-
-
 def snippet(text, needle, width=110):
     """The match near the start, so a narrow pane that cuts the end still shows it."""
     flat = one_line(text, 100_000)
@@ -463,44 +493,6 @@ def snippet(text, needle, width=110):
     start = max(0, i - 14) if i >= 0 else 0
     end = min(len(flat), start + width)
     return ("…" if start else "") + flat[start:end] + ("…" if end < len(flat) else "")
-
-
-def search(query, limit=20):
-    """Sessions whose prompts, titles, recaps or replies mention the query, newest first."""
-    q = query.strip()
-    if not q:
-        return []
-    try:
-        out = subprocess.run(["rg", "-i", "-F", "--no-heading", "--with-filename", "--max-columns", "60000",
-                              "--glob", "*.jsonl", "--glob", "!**/subagents/**", "-e", q, PROJECTS_DIR],
-                             capture_output=True, text=True, timeout=30).stdout
-    except FileNotFoundError:
-        out = subprocess.run(["grep", "-r", "-i", "-F", "--include=*.jsonl", "-e", q, PROJECTS_DIR], capture_output=True, text=True, timeout=60).stdout
-    needle = q.lower()
-    hits = {}
-    for line in out.splitlines():
-        path, sep, raw = line.partition(".jsonl:")  # paths can hold ':' but every transcript ends in .jsonl
-        if not sep or "/subagents/" in path or not raw.startswith("{"):
-            continue
-        try:
-            rec = json.loads(raw)
-        except ValueError:
-            continue
-        text = searchable_text(rec)
-        if needle in text.lower():
-            at = iso_ms(rec.get("timestamp")) or 0
-            hit = hits.setdefault(os.path.basename(path), {"path": path + ".jsonl", "at": -1})
-            if at > hit["at"]:
-                hit.update(at=at, snippet=snippet(text, needle))
-    for hit in hits.values():  # a match only in an undated record (his own title) takes the file's date
-        if hit["at"] <= 0:
-            hit["at"] = int(os.path.getmtime(hit["path"]) * 1000)
-    results = []
-    for sid, hit in sorted(hits.items(), key=lambda kv: kv[1]["at"], reverse=True)[:limit]:
-        head = read_head(hit["path"])
-        results.append({"sid": sid, "name": display_name(head, hit["path"]) or sid[:8], "snippet": hit["snippet"], "at": hit["at"],
-                        "date": local_time(hit["at"], "%-m/%-d"), "cwd": head["cwd"]})
-    return results
 
 
 def busy_days(days):
@@ -534,16 +526,11 @@ def main(argv):
     parser = argparse.ArgumentParser(prog="python -m cockpit.sessions", description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("snapshot")
-    find = commands.add_parser("search")
-    find.add_argument("query", nargs="+")
-    find.add_argument("--limit", type=int, default=20)
     commands.add_parser("busydays").add_argument("days", type=int, nargs="?", default=14)
     args = parser.parse_args(argv)
 
     if args.command == "snapshot":
         print(json.dumps(Watcher().snapshot()))
-    elif args.command == "search":
-        print(json.dumps(search(" ".join(args.query), args.limit)))
     else:
         print(json.dumps(busy_days(args.days)))
 

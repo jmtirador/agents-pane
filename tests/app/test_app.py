@@ -213,14 +213,13 @@ async def test_one_click_opens_a_session_and_gives_it_the_keys(cockpit):  # F2
         assert gave_keys(cockpit, cockpit.tmux.viewers[cockpit.tmux.slot_job])
 
 
-async def test_a_chat_it_cannot_show_gets_a_note_on_the_right(cockpit):  # F6
+async def test_a_chat_it_cannot_show_gets_a_peek_saying_where_it_is(cockpit):  # F6, G1
     cockpit.rows.append(row("tab-cccc", "working", name="old chat", jobId=None, tmux=None))
     async with cockpit.app.run_test(size=(42, 28)) as pilot:
         await cockpit.settle(pilot)
         cockpit.app.screen.select("tab-cccc")
         await cockpit.settle(pilot, 0.4)
-        notes = [c for c in cockpit.tmux.named("set-option") if "@ap_note" in c]
-        assert cockpit.tmux.slot_job == "welcome" and notes and "terminal tab outside tmux" in notes[-1][-1]
+        assert cockpit.tmux.slot_job == "welcome" and "terminal tab outside tmux" in store.read_peek()["note"]
 
 
 async def test_a_session_he_typed_into_stays_warm(cockpit):  # F1: the viewer watches for Claude's own list, so it can't drift
@@ -244,9 +243,8 @@ async def test_passing_over_a_session_that_isnt_running_doesnt_start_it(cockpit)
         cockpit.app.screen.action_quiet()  # the idle box, where stopped sessions are
         cockpit.app.screen.select("stop-cccc")
         await cockpit.settle(pilot, 0.4)
-        notes = [c for c in cockpit.tmux.named("set-option") if "@ap_note" in c]
         assert "stop-ccc" not in cockpit.tmux.viewers and cockpit.tmux.slot_job == "welcome"
-        assert notes and "Enter brings it back" in notes[-1][-1]
+        assert ["enter", "bring it back"] in store.read_peek()["keys"]
 
 
 async def test_the_right_side_follows_when_the_card_on_it_goes_away(cockpit):  # F6, from the v4 review (X twice on the shown card)
@@ -258,3 +256,150 @@ async def test_the_right_side_follows_when_the_card_on_it_goes_away(cockpit):  #
         cockpit.rows[:] = [r for r in cockpit.rows if r["sid"] != "done-bbbb"]
         await cockpit.settle(pilot, 1.5)
         assert cockpit.app.screen.selected == "work-aaaa" and cockpit.tmux.slot_job == "work-aaa"
+
+
+# ---------------------------------------------------------------- v4.1: a peek for every session it can't attach (G1, G7, G9, G10, G12)
+
+
+def sleeping():
+    return row("old-dddd", "idle", name="old work", alive=False, lastPrompt="fix the export", away="Fixed the export.",
+               itSaid="Fixed.", lastChange=row("x")["lastChange"] - 3 * 86400_000)
+
+
+async def test_resting_on_a_session_that_isnt_running_shows_its_peek(cockpit):  # G1: 17 of his 20 showed only the logo
+    cockpit.rows.append(sleeping())
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot)
+        cockpit.app.screen.action_quiet()
+        cockpit.app.screen.select("old-dddd")
+        await cockpit.settle(pilot, 0.4)
+        peek = store.read_peek()
+        assert (peek["name"], peek["asked"], peek["recap"]) == ("old work", "fix the export", "Fixed the export.")
+        assert cockpit.tmux.slot_job == "welcome" and "old-ddd" not in cockpit.tmux.viewers  # nothing started or attached
+
+
+async def test_a_running_session_blanks_the_peek_behind_it(cockpit):  # G1: the hidden peek never shows the wrong session later
+    cockpit.rows.append(sleeping())
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot)
+        cockpit.app.screen.action_quiet()
+        cockpit.app.screen.select("old-dddd")
+        await cockpit.settle(pilot, 0.4)
+        cockpit.app.screen.select("work-aaaa")
+        await cockpit.settle(pilot, 0.4)
+        assert cockpit.tmux.slot_job == "work-aaa" and store.read_peek() == {"blank": True}
+
+
+async def test_the_right_side_follows_the_cursor_from_the_first_screen(cockpit):  # G7: the logo until a key was pressed
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        assert cockpit.tmux.slot_job == cockpit.app.screen.row(cockpit.app.screen.selected)["jobId"]
+
+
+async def test_one_arrow_press_switches_at_once(cockpit):  # G9: a 120 ms wait on every press
+    cockpit.rows[:] = [row("work-aaaa", "working", name="one"), row("tab-cccc", "working", name="two", jobId=None, tmux=None)]
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("down")
+        await cockpit.settle(pilot, 0.03)
+        assert cockpit.tmux.slot_job == "welcome" and store.read_peek()["name"] == "two"
+
+
+async def test_nothing_pulses_while_no_one_is_looking(cockpit):  # G10: ~6% of a core for a screen nobody saw
+    cockpit.tmux.attached = 0
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        screen = cockpit.app.screen
+        drawn = []
+        screen.redraw = lambda: drawn.append(1)
+        screen.spin()
+        assert drawn == []
+        cockpit.tmux.attached = 1
+        await cockpit.settle(pilot, 1.5)
+        screen.spin()
+        assert drawn
+
+
+async def test_a_day_counts_when_he_opens_it_not_when_the_list_starts(cockpit):  # G12
+    cockpit.tmux.attached = 0
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        assert store.load()["opens"] == []
+        cockpit.tmux.attached = 1
+        await cockpit.settle(pilot, 1.5)
+        assert len(store.load()["opens"]) == 1
+
+
+async def test_a_peek_offers_only_the_keys_that_work_for_it(cockpit):  # G1: "enter open it here" on a chat in the Claude app
+    cockpit.rows[:] = [row("old-dddd", "idle", name="old work", alive=False),
+                       row("app-eeee", "working", name="study plan", jobId=None, desktop=True, detail="writing the plan")]
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot)
+        screen = cockpit.app.screen
+        screen.action_quiet()
+        screen.select("old-dddd")
+        await cockpit.settle(pilot, 0.4)
+        assert [k for k, _ in store.read_peek()["keys"]] == ["enter", "r"]
+        screen.select("app-eeee")
+        await cockpit.settle(pilot, 0.4)
+        peek = store.read_peek()
+        assert peek["keys"] == [] and "Claude app" in peek["note"] and peek["doing"] == "writing the plan"
+
+
+# ---------------------------------------------------------------- the v4.1 review
+
+
+async def test_with_every_card_idle_the_right_side_is_the_welcome_screen(cockpit):  # review 1: yesterday's peek stayed
+    cockpit.rows[:] = [row("old-dddd", "idle", name="old work", alive=False)]
+    store.write_peek({"name": "yesterday's session", "keys": []})
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        assert store.read_peek() == {} and cockpit.tmux.slot_job == "welcome"
+
+
+async def test_a_peek_follows_its_session_while_he_rests_on_it(cockpit):  # review 2: the header froze
+    cockpit.rows[:] = [row("tab-cccc", "working", name="chat", jobId=None, tmux=None, detail="drafting")]
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        assert store.read_peek()["state"] == "working"
+        cockpit.rows[0] = row("tab-cccc", "needs", name="chat", jobId=None, tmux=None, question="Send it?")
+        await cockpit.settle(pilot, 1.5)
+        peek = store.read_peek()
+        assert (peek["state"], peek["question"]) == ("needs", "Send it?")
+
+
+async def test_enter_right_after_moving_is_not_undone_by_the_settle(cockpit):  # review 5
+    cockpit.rows[:] = [row("work-aaaa", "working", name="one"), row("stop-cccc", "stopped", name="two", alive=False)]
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        screen = cockpit.app.screen
+        screen.action_quiet()
+        screen.moved_at = __import__("time").time()  # as if he just pressed an arrow: the move waits to settle
+        screen.select("stop-cccc")
+        screen.action_open()  # Enter at once
+        await cockpit.settle(pilot, 0.5)
+        assert cockpit.tmux.slot_job == "stop-ccc" and screen.live == "stop-ccc"
+
+
+async def test_a_day_counts_when_he_has_it_open_across_midnight(cockpit, monkeypatch):  # review 7
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        store.save({**store.load(), "opens": []})
+        cockpit.app.screen.state["opens"] = []  # a new day, the same attached client
+        await cockpit.settle(pilot, 1.5)
+        assert len(cockpit.app.screen.state["opens"]) == 1
+
+
+async def test_enter_right_after_moving_onto_a_chat_elsewhere_still_shows_its_peek(cockpit):  # second pass
+    cockpit.rows[:] = [row("work-aaaa", "working", name="one"), row("tmx-cccc", "working", name="two", jobId=None, tmux="%9")]
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        screen = cockpit.app.screen
+        screen.select("work-aaaa")
+        await cockpit.settle(pilot, 0.5)
+        assert cockpit.tmux.slot_job == "work-aaa"
+        screen.moved_at = __import__("time").time()
+        screen.select("tmx-cccc")
+        screen.action_open()  # Enter before the move settled: it switches to that window, and the right side follows
+        await cockpit.settle(pilot, 0.5)
+        assert cockpit.tmux.slot_job == "welcome" and store.read_peek()["name"] == "two"

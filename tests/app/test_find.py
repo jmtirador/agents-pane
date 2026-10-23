@@ -3,24 +3,24 @@
 import os
 import time
 
-from cockpit import sessions
+from cockpit import search
 
 
 def hit(sid, name):
     return {"sid": sid, "name": name, "snippet": name, "at": 0, "date": "10/8", "cwd": os.path.expanduser("~/Projects/finch")}
 
 
-def fake_search(query, limit=20):
+def fake_search(query, limit=20, refresh=None):
     return {"log": [hit("old-log", "log cleanup")], "login": [hit("old-login", "login bug")]}.get(query.strip(), [])
 
 
-def slow_search(query, limit=20):
-    time.sleep(0.5)  # a real search over every transcript can take a couple of seconds
+def slow_search(query, limit=20, refresh=None):
+    time.sleep(0.5)  # a search while the index catches up
     return [hit(f"old-{query}", query)]
 
 
 async def test_enter_right_after_typing_opens_the_current_query(cockpit, monkeypatch):
-    monkeypatch.setattr(sessions, "search", fake_search)
+    monkeypatch.setattr(search, "find", fake_search)
     async with cockpit.app.run_test(size=(96, 30)) as pilot:
         await cockpit.settle(pilot)
         await pilot.press("slash", *"log")
@@ -31,7 +31,7 @@ async def test_enter_right_after_typing_opens_the_current_query(cockpit, monkeyp
 
 
 async def test_enter_with_nothing_found_opens_nothing(cockpit, monkeypatch):
-    monkeypatch.setattr(sessions, "search", fake_search)
+    monkeypatch.setattr(search, "find", fake_search)
     async with cockpit.app.run_test(size=(96, 30)) as pilot:
         await cockpit.settle(pilot)
         await pilot.press("slash", *"zzz", "enter")
@@ -40,7 +40,7 @@ async def test_enter_with_nothing_found_opens_nothing(cockpit, monkeypatch):
 
 
 async def test_typing_after_enter_cancels_the_open(cockpit, monkeypatch):
-    monkeypatch.setattr(sessions, "search", slow_search)
+    monkeypatch.setattr(search, "find", slow_search)
     async with cockpit.app.run_test(size=(96, 30)) as pilot:
         await cockpit.settle(pilot)
         await pilot.press("slash", *"sch", "enter", "x")  # changed his mind before the results came back
@@ -49,7 +49,7 @@ async def test_typing_after_enter_cancels_the_open(cockpit, monkeypatch):
 
 
 async def test_picking_by_hand_cancels_the_open(cockpit, monkeypatch):
-    monkeypatch.setattr(sessions, "search", slow_search)
+    monkeypatch.setattr(search, "find", slow_search)
     async with cockpit.app.run_test(size=(96, 30)) as pilot:
         await cockpit.settle(pilot)
         await pilot.press("slash", *"sch")
@@ -57,3 +57,27 @@ async def test_picking_by_hand_cancels_the_open(cockpit, monkeypatch):
         await pilot.press(*"ema", "enter", "down")  # Enter, then reached for the list before the new results came
         await cockpit.settle(pilot, 1.0)
         assert cockpit.started == []
+
+
+async def test_results_found_while_indexing_say_so(cockpit, monkeypatch):  # G8: the first build takes a few seconds
+    monkeypatch.setattr(search, "find", lambda query, limit=20, refresh=None: [{**hit("old-log", "log cleanup"), "partial": True}])
+    async with cockpit.app.run_test(size=(96, 30)) as pilot:
+        await cockpit.settle(pilot)
+        await pilot.press("slash", *"log")
+        await pilot.pause(0.8)
+        assert "Still indexing" in str(cockpit.app.screen.query_one(".hint").render())
+
+
+async def test_nothing_found_while_indexing_still_says_so(cockpit, monkeypatch):  # the runtime tester: "Nothing yet." with no hint
+    monkeypatch.setattr(search, "update_elsewhere", lambda wait=True: False)  # another update is still building the index
+
+    def find(query, limit=20, refresh=None):
+        refresh()
+        return []
+
+    monkeypatch.setattr(search, "find", find)
+    async with cockpit.app.run_test(size=(96, 30)) as pilot:
+        await cockpit.settle(pilot)
+        await pilot.press("slash", *"zebra")
+        await pilot.pause(0.8)
+        assert "Still indexing" in str(cockpit.app.screen.query_one(".hint").render())

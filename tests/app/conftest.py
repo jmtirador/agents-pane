@@ -11,7 +11,7 @@ import pytest
 from helpers import NOW, row
 
 from cockpit import app as appmod
-from cockpit import sessions, store, tmuxctl
+from cockpit import search, sessions, store, tmuxctl
 
 PANES = {"list": "%1", "live": "%2"}
 
@@ -23,6 +23,7 @@ class FakeTmux:
         self.viewers = {"welcome": "%2"}  # job -> pane id
         self.slot_job = "welcome"  # the job on the right side
         self.made = 10
+        self.attached = 1  # clients on the cockpit session
 
     def __call__(self, *args):
         self.calls.append(args)
@@ -53,7 +54,7 @@ class FakeTmux:
             self.slot_job = next((job for job, pane in self.viewers.items() if pane == moved), self.slot_job)
         if name == "list-panes" and "-a" in command:
             return "".join(f"{tmuxctl.SESSION if job == self.slot_job else tmuxctl.VIEWERS}\t"
-                           f"{'cockpit' if job == self.slot_job else 'v'}\t{pane}\tlive\t{job}\t0\t\n"
+                           f"{'cockpit' if job == self.slot_job else 'v'}\t{pane}\tlive\t{job}\t0\t\t{self.attached}\n"
                            for job, pane in self.viewers.items())
         if name == "display-message":
             fmt = command[-1]
@@ -96,6 +97,7 @@ class Cockpit:
         monkeypatch.setattr(tmuxctl, "claude", lambda *args, cwd=None: (self.claude_calls.append(args), (0, ""))[1])
         monkeypatch.setattr(tmuxctl, "type_into", lambda job, text: self.typed.append((job, text)) or True)
         monkeypatch.setattr(tmuxctl, "launch_folder", lambda: str(tmp_path))
+        monkeypatch.setattr(search, "update_elsewhere", lambda wait=True: True)  # never index his real sessions from a test
         monkeypatch.setattr(store, "PATH", str(tmp_path / "state.json"))
         monkeypatch.setattr(sessions, "registry_warning", lambda rows: "")
         cockpit = self

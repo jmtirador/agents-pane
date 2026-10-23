@@ -16,7 +16,7 @@ from textual.suggester import SuggestFromList
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
-from . import model, sessions
+from . import model, search, sessions
 from .theme import ORDER, PALETTES
 
 CSS = """
@@ -161,8 +161,8 @@ class Find(Dialog):
 
     def body(self):
         yield Input(placeholder="what was it about?  e.g. invoice export")
+        yield Static("Looks through every prompt, title, recap and reply.", classes="hint")  # above the hits, so a long list can't hide it
         yield OptionList(id="hits")
-        yield Static("Looks through every prompt, title, recap and reply.", classes="hint")
 
     def on_mount(self):
         self.query_one(Input).focus()
@@ -172,14 +172,16 @@ class Find(Dialog):
         self.open_when_found = False  # he typed on after Enter: he hasn't confirmed this text yet
         if self.timer:
             self.timer.stop()
-        self.timer = self.set_timer(0.35, lambda: self.search(event.value))
+        self.timer = self.set_timer(0.2, lambda: self.search(event.value))  # the index answers in ~0.1 s (G8)
 
     @work(thread=True, exit_on_error=False, exclusive=True)
     def search(self, query):
-        hits = sessions.search(query, 30) if len(query.strip()) >= 2 else []
-        self.app.call_from_thread(self.show, query, hits)
+        done = []  # whether the index caught up, which matters with no hits too (the runtime tester)
+        refresh = lambda: done.append(search.update_elsewhere()) or done[-1]  # noqa: E731
+        hits = search.find(query, 30, refresh=refresh) if len(query.strip()) >= 2 else []
+        self.app.call_from_thread(self.show, query, hits, False in done)
 
-    def show(self, query, hits):
+    def show(self, query, hits, partial=False):
         if query != self.query_one(Input).value:
             return  # typed on since; the search for the newer text will show
         self.shown_for = query
@@ -197,6 +199,8 @@ class Find(Dialog):
                 line.truncate(room + 7, overflow="ellipsis")
             found.add_option(Option(Text("\n").join([title, snippet]), id=h["sid"]))
         found_words = f"{len(hits)} found. Enter opens the top one; ↓ picks another." if hits else "Nothing yet."
+        if partial or (hits and hits[0].get("partial")):
+            found_words += " Still indexing your sessions, so some may be missing."
         self.query_one(".hint", Static).update(found_words)
         if self.open_when_found:
             self.open_when_found = False

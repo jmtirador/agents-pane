@@ -5,21 +5,42 @@ The shape follows Keep a Changelog (https://keepachangelog.com/en/1.1.0/) and th
 
 ## [Unreleased]
 
-## [4.0.0] - 2026-10-14
+## [4.1.0] - 2026-10-22
 
-Fast, and it works the way you'd expect.
+### Added
+- The right side shows a peek at any session that isn't running (most of them, since Claude Code stops an idle session's process after about an hour): what you asked, its last reply, its recap, what it's doing, and only the keys that work for it. Nothing starts until you press Enter.
 
 ### Changed
-- Switching sessions is instant once you've looked at a session: each one you view keeps its own `claude attach` running in a hidden tmux session, and picking it again swaps it onto the right side in a few milliseconds instead of starting it over (about 0.05 s instead of 0.56 s, with no blank flash). Up to four sessions you looked at in the last 15 minutes stay ready this way; Claude Code stops a session's process after about an hour with nothing attached, so these no longer boot again when you come back.
+- Find searches a small index of only your prompts, replies, recaps and titles, so a search takes 15 to 300 ms instead of 5 to 14 seconds, and the list no longer swells to several GB while it searches. The index builds once (about 5 seconds) and then reads only what's new.
+- One arrow press shows the next session right away; a quick run of presses still waits for you to stop.
+- A session stuck on a permission prompt says what it wants to do, instead of a blank line.
+- Working cards say what they're doing in words on up to two lines; messaging, tool searches, schedules and other common tools no longer show as code names.
+- Cards use Claude Code's own name for a session (your rename first), so they match the right side and agent view.
+- A session waiting for more than two hours stays orange but stops pulsing, and nothing pulses while no one has the dashboard open.
+- A reply whose first sentence is one word ("Done.") shows the next sentence too.
+- A chat in the Claude app is described as one, not as a terminal tab.
+
+### Fixed
+- The right side now follows the highlighted card from the moment the dashboard opens.
+- `u` counts the days you opened the dashboard, not the days its list process happened to start.
+- A double-click on a card no longer leaves your keys in the list.
+- If the right side ever closes, the next session you pick brings it back.
+- Find's "still indexing" note no longer hides under a long list of results.
+
+## [4.0.0] - 2026-10-14
+
+### Changed
+- Switching sessions is instant once you've looked at a session: each one you view keeps its own `claude attach` running in a hidden tmux session, and picking it again swaps it onto the right side instead of starting it over (about 0.05 s instead of 0.56 s, with no blank flash). Up to four sessions you looked at in the last 15 minutes stay ready this way. Because they stay attached, Claude Code doesn't stop them (it does after about an hour with nothing attached), so they don't boot again when you come back.
 - The right side always shows the card you're on. A session it can't show, like a chat in another terminal tab, gets a short note there saying where it is.
-- One click on a background session's card opens it, with your keys in it (Enter still switches to a chat in another tmux window or resumes an ended one). The blank row between two cards opens the card below it, and messages pop up at the top of the list and go away after 3 seconds instead of covering the bottom cards.
+- One click on a background session's card opens it, with your keys in it (Enter still switches to a chat in another tmux window or resumes an ended one).
+- The blank row between two cards opens the card below it, and messages pop up at the top of the list and go away after 3 seconds instead of covering the bottom cards.
 - Stopping a session is now capital `S` twice and deleting is capital `X` twice, so a reply typed into the list by mistake can't stop or delete anything.
 - A waiting card says how long it has waited ("waiting 4m"), shows the whole question on up to three lines, and lists its choices. A working card says what it's doing in words ("editing app.py") or "no output for 12m".
 - Cards drop the folder name, the "showing" mark and the context warning; the highlighted card is the one on the right.
 - The `u` screen just shows how often you've used the dashboard.
 
 ### Added
-- `q` or Ctrl+C in the list closes the dashboard, and the bar says so; every session keeps running. Opened from inside another tmux session, it takes you back there.
+- `q` or Ctrl+C in the list closes the dashboard, and the bar says so; every session keeps running. If you opened it from inside another tmux session, closing it takes you back there.
 - Leaving a session from inside Claude Code (Ctrl+C twice, `←`, `/exit` or Ctrl+Z) brings the same session back on the right and gives your keys back to the list, instead of leaving Claude's own session list there.
 
 ### Fixed

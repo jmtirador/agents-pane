@@ -15,7 +15,7 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Static
 
-from . import __version__, model, sessions, store, tmuxctl, view
+from . import __version__, model, search, sessions, store, tmuxctl, view
 from .dialogs import CSS as DIALOG_CSS
 from .dialogs import Dialog, Find, NewSession, Note, ThemePicker, TypeInto, help_lines
 from .theme import PALETTES, install
@@ -38,17 +38,47 @@ class CardText(Static):
             self.screen.clicked(at.y, event.chain)
 
 
+SETTLE_S = 0.12  # a run of arrow presses waits this long after the last one
+
+
 def where_it_is(row):
-    """What the right side says about a session it can't show (F6)."""
+    """Where a session the right side can't attach is, and what Enter does about it (F6)."""
+    if row.get("desktop") and row["alive"]:
+        return "It's open in the Claude app. Switch there to answer it."
     if row["jobId"] and row["state"] == "stopped":
-        return f"{row['name']} is stopped. Enter brings it back."
+        return "It's stopped. Enter brings it back."
     if row["jobId"]:
-        return f"{row['name']} isn't running right now. Enter starts it again where it left off."
+        return "It isn't running right now. Enter starts it again where it left off."
     if row["alive"] and row["tmux"]:
-        return f"{row['name']} is open in another tmux window. Enter switches there."
+        return "It's open in another tmux window. Enter switches there."
     if row["alive"]:
-        return f"{row['name']} is open in a terminal tab outside tmux. Switch to that tab to use it."
-    return f"{row['name']} has ended. Enter brings it back in the background."
+        return "It's open in a terminal tab outside tmux. Switch to that tab to use it."
+    return "It has ended. Enter brings it back in the background."
+
+
+def note_and_keys(row):
+    """For the peek: where the session is in a few words, and only the keys that do something for it there."""
+    if row.get("desktop") and row["alive"]:
+        return "It's open in the Claude app. Switch there to answer it.", []
+    if row["jobId"] and row["state"] == "stopped":
+        return "It's stopped.", [("enter", "bring it back"), ("r", "reply")]
+    if row["jobId"]:
+        return "It isn't running right now.", [("enter", "start it again here"), ("r", "reply")]
+    if row["alive"] and row["tmux"]:
+        return "It's open in another tmux window.", [("enter", "switch there")]
+    if row["alive"]:
+        return "It's open in a terminal tab outside tmux. Switch to that tab to use it.", []
+    return "It has ended.", [("enter", "bring it back in the background")]
+
+
+def peek_of(row, now):
+    """What the right side shows for a session it can't attach (G1): the welcome viewer reads the reply itself."""
+    asking, working = row["state"] in ("needs", "asks"), row["state"] in ("working", "quiet")
+    note, keys = note_and_keys(row)
+    return {"sid": row["sid"], "path": row.get("path") or "", "name": row["name"], "label": model.long_label(row, now),
+            "state": row["state"], "where": f"in {sessions.tilde(row['cwd'])}" if row["cwd"] else "", "asked": row["lastPrompt"],
+            "recap": row["away"], "question": row["question"] if asking else "", "options": row["options"] if asking else [],
+            "doing": model.second_line(row) if working else "", "note": note, "keys": keys, "color": model.project_color(row["cwd"])}
 
 
 class ListHeader(Static):
@@ -94,6 +124,10 @@ class ListScreen(Screen):
         self.rows, self.order, self.sids = [], [], []
         self.selected = self.live = self.pending = None
         self.slot = "?"  # what the tmux thread last saw (or asked for) on the right side; "?" until it first reads it
+        self.warm = set()  # jobs with a viewer, as of the last read: switching to one is instant (G9)
+        self.peeked = None  # the peek on the right side, as last written ({} the welcome screen, None a live session)
+        self.attached = None  # is anyone looking? None until the first read (G10, G12)
+        self.moved_at = 0.0
         self.ticks = 0
         self.show_quiet, self.frame, self.armed, self.armed_at = False, 0, None, 0.0
         self.dim = False  # while he's typing to Claude, the list steps back
@@ -108,13 +142,10 @@ class ListScreen(Screen):
         yield FindLine()
 
     def on_mount(self):
-        today = date.today().isoformat()
-        if today not in self.state["opens"]:
-            self.state["opens"] = (self.state["opens"] + [today])[-60:]
-            store.save(self.state)
         if IN_TMUX:
             self.background(tmuxctl.bind_keys)  # first, so Ctrl+] works as soon as possible
             self.background(self.restyle)
+            search.update_elsewhere(wait=False)  # find's index catches up in its own process (G8)
         self.snap()
         self.set_interval(1.0, self.snap)
         self.set_interval(0.6, self.spin)
@@ -165,12 +196,24 @@ class ListScreen(Screen):
     def read_slot(self):
         """What the right side shows. It runs on the tmux thread after any switch the list queued, so it's never stale;
         a change it didn't ask for came from the welcome screen (it started a session) or `yolo "prompt"`."""
-        job = tmuxctl.showing()
+        job, self.warm, attached = tmuxctl.look()
+        if attached != self.attached or (attached and date.today().isoformat() not in self.state["opens"]):
+            self.app.call_from_thread(self.looking, attached)  # also a new day with the same client still attached
         if job and job != self.slot:
+            first = self.slot == "?"
             self.slot = job
-            self.app.call_from_thread(self.went_live, None if job == "welcome" else job)
+            self.app.call_from_thread(self.went_live, None if job == "welcome" else job, first)
 
-    def went_live(self, job):
+    def looking(self, attached):
+        """A client attached (or left). The pulse only runs while someone can see it (G10), and a day he opens it counts
+        toward `u`, not a day the list process happened to start (G12)."""
+        self.attached = attached
+        today = date.today().isoformat()
+        if attached and today not in self.state["opens"]:
+            self.state["opens"] = (self.state["opens"] + [today])[-60:]
+            store.save(self.state)
+
+    def went_live(self, job, first=False):
         self.live = job
         selected = self.selected
         self.point_at(job)
@@ -178,6 +221,8 @@ class ListScreen(Screen):
         if self.selected != selected:  # leaving a session (no job) doesn't move the cursor, so it doesn't scroll
             self.reveal()
         self.background(self.publish)
+        if first and not job:
+            self.follow()  # the dashboard opened on the welcome screen: show the cursor's card (G7)
 
     def point_at(self, job):
         """Select the card of a session that just went live, or as soon as its card appears."""
@@ -213,6 +258,16 @@ class ListScreen(Screen):
             self.reveal()
         if IN_TMUX:
             self.background(self.publish)
+        self.keep_right()
+
+    def keep_right(self):
+        """The right side keeps up with the cursor's card between moves: a peek redraws when what it shows changed
+        (review 2), a peeked session that started running gets its viewer, and no card at all is the welcome screen."""
+        if not IN_TMUX or self.switch_timer or self.slot in ("?", "") or self.live:
+            return
+        row = self.row(self.selected)
+        if not row or (row["jobId"] and row["alive"]) or peek_of(row, int(time.time() * 1000)) != self.peeked:
+            self.follow()
 
     def changed(self, row, was):
         """A watched session that stops working gets a Mac notification; a session newly waiting for him gets a toast."""
@@ -305,7 +360,8 @@ class ListScreen(Screen):
 
     def spin(self):
         self.frame += 1
-        if any(r["state"] in ("working", "needs") for r in self.rows):  # the working dot and the waiting text pulse
+        now = int(time.time() * 1000)
+        if self.attached is not False and any(model.pulses(r, now) for r in self.rows):  # nobody looking: no pulse (G10)
             self.redraw()
 
     # ------------------------------------------------ moving and opening
@@ -323,44 +379,69 @@ class ListScreen(Screen):
         self.reveal()  # also when it's the card it's on: g on the first card after scrolling away brings it back
 
     def follow_soon(self):
+        """One move switches the right side at once (G9); a run of moves, or one that would start a new viewer
+        (144 MB for a card he's only passing; the v4.1 critic), waits for the cursor to settle."""
+        now = time.time()
+        burst, self.moved_at = now - self.moved_at < SETTLE_S, now
         if self.switch_timer:
             self.switch_timer.stop()
-        self.switch_timer = self.set_timer(0.12, self.follow)  # a short settle while he runs through the list
+            self.switch_timer = None
+        row = self.row(self.selected)
+        starts_one = row and row["jobId"] and row["alive"] and row["jobId"] not in self.warm
+        if row and not burst and not starts_one:
+            self.follow()
+        else:
+            self.switch_timer = self.set_timer(SETTLE_S, self.follow)
 
     def follow(self):
         """The right side always shows the cursor's card (F6): its viewer, or a note when it can't be shown here.
         Only a running session gets a viewer: an attach would start a stopped or sleeping one just because the
         cursor passed it (the v4 review). Enter or a click starts it on purpose."""
+        self.switch_timer = None
         row = self.row(self.selected)
-        if not IN_TMUX or not row:
+        if not IN_TMUX:
+            return
+        if not row:  # nothing to show (every card idle and folded): the welcome screen, not an old peek (review 1)
+            if self.peeked != {}:
+                self.peek(None)
             return
         if row["jobId"] and row["alive"]:
             if row["jobId"] != self.live:
                 self.show(row["jobId"])
         else:
-            self.note(where_it_is(row))
+            self.peek(row)
 
     def show(self, job, fresh=False):
-        self.live = job
+        self.live, self.peeked = job, None
         self.point_at(job)
         self.background(self.put_on_right, job, fresh)
         self.redraw()
         self.reveal()
 
     def put_on_right(self, job, fresh):
+        if self.slot == "welcome":
+            try:
+                store.write_peek({"blank": True})  # the peek it hides goes blank, so it can't come back showing the wrong session
+            except OSError:
+                pass
         self.slot = job  # on the tmux thread, so read_slot can't see the old answer after this
         tmuxctl.view(job, fresh=fresh)
 
-    def note(self, text):
-        """The welcome screen on the right, saying where a session it can't show is."""
+    def peek(self, row):
+        """A session the right side can't attach: what it is, what he asked, what it said (G1). Nothing starts.
+        No row is the welcome screen."""
         self.live = None
+        self.peeked = peek_of(row, int(time.time() * 1000)) if row else {}
         self.redraw()
-        self.background(self.put_note, text)
+        self.background(self.put_peek, self.peeked)
 
-    def put_note(self, text):
+    def put_peek(self, peek):
+        try:
+            store.write_peek(peek)  # before the swap, so the welcome viewer is already redrawing when it comes into view
+        except OSError:
+            pass  # a full disk costs the peek, never the switch
         self.slot = "welcome"
         tmuxctl.view("welcome")
-        tmuxctl.set_note(text)
 
     def clicked(self, line, chain):
         if not 0 <= line < len(self.sids):
@@ -395,6 +476,10 @@ class ListScreen(Screen):
             self.select(sids[end])
 
     def action_open(self):
+        if self.switch_timer:  # a settle still pending from the last move must not swap a peek back over this (review 5),
+            self.switch_timer.stop()  # but the right side still catches up with the card first (the second pass)
+            self.switch_timer = None
+            self.follow()
         row = self.row(self.selected)
         if not row or not IN_TMUX:
             return
@@ -404,7 +489,7 @@ class ListScreen(Screen):
         elif row["alive"] and row["tmux"]:
             self.background(tmuxctl.jump, row["tmux"])
         elif row["alive"]:
-            self.app.notify("It's a chat in a terminal tab outside tmux. Switch to that tab to use it.", title=row["name"])
+            self.app.notify(where_it_is(row), title=row["name"])
         else:
             self.reopen(row["sid"], row["cwd"], row["name"])
 

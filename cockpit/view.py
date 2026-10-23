@@ -79,7 +79,8 @@ def card(row, p: Palette, width, now, frame, *, selected, live, watched, dim=Fal
     """A session that needs a look (waiting, asking, failed, working): its name and for how long, then what it wants
     or what it's doing, in words. v4 (F7, F8): the whole question and its choices; no folder, no context %, no "showing"."""
     state = row["state"]
-    waiting = state == "needs"  # waiting for him right now: its text pulses orange, even while the list is dimmed
+    waiting = state == "needs"  # waiting for him right now: its text is orange, even while the list is dimmed
+    frame = frame if model.pulses(row, now) else 0  # and pulses until it has waited two hours (G11)
     bg = p.sel if selected else p.card  # the cursor's card is the one on the right, so it stays lit while he types there
     ink = attention(p, bg, frame) if waiting else p.text2 if dim else p.text
     soft = ink if waiting else p.text3 if dim else p.text2
@@ -94,7 +95,7 @@ def card(row, p: Palette, width, now, frame, *, selected, live, watched, dim=Fal
     if not row["jobId"] and row["alive"]:
         flags.append(("↗ ", soft))  # a chat in some other window: it can't be shown here
     age = model.row_age(row, now)
-    label = {"needs": f"waiting {age}", "asks": f"asked {age} ago", "failed": f"failed {age} ago"}.get(state, age)
+    label = model.label(row, now)
     name_style = f"bold {ink}" if waiting or (selected and not dim) else ink
     lines = [bar(bg, [stripe, (" ", ""), (mark + " ", mark_color), (row["name"], name_style)],
                  [(" ", ""), *flags, (label + " ", soft)], width)]  # a gap, so a long name is cut ("…") before the age
@@ -117,6 +118,8 @@ def body(row, p: Palette, room, age, soft):
         return [(line, p.fail) for line in wrap(said, room, 2)] or [(" ", p.fail)]
     if state == "quiet":
         return [(f"no output for {age}", p.quiet)]
+    if state == "working":
+        return [(line, soft) for line in wrap(said, room, 2)] or [(" ", soft)]  # two lines of what it's doing (G13)
     return [(wrap(said, room, 1)[0] if said else " ", soft)]
 
 

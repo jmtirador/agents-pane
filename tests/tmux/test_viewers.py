@@ -1,8 +1,10 @@
 """v4: warm viewers on a private tmux server with a fake claude (decision 0006, problems F1, F4, F5)."""
 
 import json
+import subprocess
 import time
 
+import conftest
 import pytest
 
 pytestmark = pytest.mark.tmux
@@ -95,13 +97,14 @@ def test_q_closes_the_dashboard_and_frees_the_hidden_viewers(rig):  # F4
     rig.wait_for(lambda: rig.tmux("has-session", "-t", "=agents-viewers").returncode != 0, "the hidden viewers closed")
 
 
-def test_a_dead_right_side_never_swaps_the_list_away(rig):  # the v4 review: with one pane, {right} is the list itself
+def test_a_dead_right_side_comes_back_and_never_takes_the_list(rig):  # the v4 review, then the v4.1 runtime tester
     two_sessions(rig)
+    listp = rig.panes()["list"]
     rig.tmux("kill-pane", "-t", rig.panes()["live"])
     rig.wait_for(lambda: list(rig.panes()) == ["list"], "only the list left")
     rig.press("Down")
-    time.sleep(1.0)
-    assert list(rig.panes()) == ["list"]  # still in the cockpit, not swapped into the hidden session
+    rig.wait_for(lambda: set(rig.panes()) == {"list", "live"}, "a new right side")
+    assert rig.panes()["list"] == listp and rig.option("list", "pane_width") == "42"
 
 
 def test_a_reply_leaves_an_open_dialog_alone(rig):  # the v4 review: the repaint nudge after a reply un-zoomed the next dialog
@@ -171,3 +174,24 @@ def test_a_healthy_cockpit_is_never_rebuilt(rig):  # a false rebuild would close
     rig.press("?")  # a dialog open, a job viewer on the right
     rig.launch()
     assert rig.session_option("@probe") == "still here"
+
+
+def test_a_double_click_on_a_card_leaves_the_keys_in_the_session(rig):  # the v4.1 runtime tester: 24 in 24 stayed in the list
+    two_sessions(rig)
+    y = next(i for i, line in enumerate(rig.whole_screen().splitlines()) if "second job" in line[:42])
+    click = f"\x1b[<0;6;{y + 1}M\x1b[<0;6;{y + 1}m"
+    subprocess.run([conftest.REAL_TMUX, "-L", rig.outer, "send-keys", "-t", "0", "-l", click + click], env=rig.env)
+    time.sleep(1.0)  # tmux's own double-click action ran 0.3 s later and took the keys back
+    assert on_right(rig, B) and rig.active() == "live"
+
+
+def test_a_rebuilt_right_side_reuses_a_warm_viewer(rig):  # second pass: it started a second claude attach
+    two_sessions(rig)
+    walk_to(rig, A)
+    walk_to(rig, B)
+    walk_to(rig, A)  # B is warm in the hidden session now
+    rig.tmux("kill-pane", "-t", rig.panes()["live"])
+    rig.wait_for(lambda: list(rig.panes()) == ["list"], "only the list left")
+    rig.press("Down" if rig.screen("list").index("first job") < rig.screen("list").index("second job") else "Up")
+    rig.wait_for(lambda: on_right(rig, B), "B back on the right")
+    assert attaches(rig, B) == 1  # the warm one moved in; no second attach

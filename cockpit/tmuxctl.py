@@ -71,23 +71,61 @@ def pane_option(pane_id, name):
     return tmux("display-message", "-p", "-t", pane_id, f"#{{{name}}}").stdout.strip() if pane_id else ""
 
 
+def heal(job, found):
+    """A new right side next to the list: the job's warm viewer moved in when it has one (a second attach would cost
+    144 MB and garble both; the second pass), else a new one (split-window; nothing is re-created in place, decision
+    0001)."""
+    list_pane = pane("list")
+    if not list_pane:
+        return False
+    pane_id, where, _, parked = found.get(job, ("", "", 0, False))
+    if pane_id and where == "hidden" and not parked:
+        if tmux("join-pane", "-h", "-d", "-s", pane_id, "-t", list_pane).returncode:
+            return False
+    else:
+        made = tmux("split-window", "-h", "-d", "-t", list_pane, "-P", "-F", "#{pane_id}", viewer_command(job))
+        if pane_id:
+            close(pane_id)  # a parked one, now that there's a fresh one
+        pane_id = made.stdout.strip()
+        if not pane_id:
+            return False
+    batch([("set-option", "-p", "-t", pane_id, "@ap_role", "live"), ("set-option", "-p", "-t", pane_id, "@ap_job", job),
+           ("set-option", "-p", "-t", pane_id, "@ap_shown", str(int(time.time()))), ("resize-pane", "-t", list_pane, "-x", str(LIST_WIDTH))])
+    return True
+
+
 def set_pane_option(pane_id, name, value):
     if pane_id:
         tmux("set-option", "-p", "-t", pane_id, name, value)
 
 
-def viewers():
-    """{job: (pane id, "slot" or "hidden", shown at, parked)} for every viewer, read from tmux each time: never from
-    the list's memory, which a crash or a second list would get wrong (decision 0006)."""
-    found = {}
-    fmt = "#{session_name}\t#{window_name}\t#{pane_id}\t#{@ap_role}\t#{@ap_job}\t#{@ap_shown}\t#{@ap_parked}"
-    for line in tmux("list-panes", "-a", "-F", fmt).stdout.splitlines():
-        session, window, pane_id, role, job, shown, parked = (line.split("\t") + [""] * 7)[:7]
+PANES = "#{session_name}\t#{window_name}\t#{pane_id}\t#{@ap_role}\t#{@ap_job}\t#{@ap_shown}\t#{@ap_parked}\t#{session_attached}"
+
+
+def viewers_and_attached():
+    """{job: (pane id, "slot" or "hidden", shown at, parked)} for every viewer, read from tmux each time (never from
+    the list's memory, which a crash or a second list would get wrong; decision 0006), and whether any client is
+    attached to the cockpit, from the same one call."""
+    found, attached = {}, False
+    for line in tmux("list-panes", "-a", "-F", PANES).stdout.splitlines():
+        session, window, pane_id, role, job, shown, parked, clients = (line.split("\t") + [""] * 8)[:8]
+        attached = attached or (session == SESSION and clients not in ("", "0"))
         if role == "live" and job and session in (SESSION, VIEWERS):
             where = "slot" if session == SESSION and window == "cockpit" else "hidden"
             if found.get(job, ("", ""))[1] != "slot":  # a copy waiting to be closed never hides the right side
                 found[job] = (pane_id, where, int(shown or 0), parked == "1")
-    return found
+    return found, attached
+
+
+def viewers():
+    return viewers_and_attached()[0]
+
+
+def look():
+    """The list's one tmux read a second: the job on the right side, the jobs with a warm viewer, and whether anyone
+    is looking (G10: with no client attached nothing needs to pulse)."""
+    found, attached = viewers_and_attached()
+    return next((job for job, v in found.items() if v[1] == "slot"), ""), set(found), attached
 
 
 def slot():
@@ -98,7 +136,7 @@ def slot():
 
 def showing():
     """The job on the right side ("welcome" for the welcome screen), or "" when it can't be read."""
-    return slot()[0]
+    return look()[0]
 
 
 def viewer_command(job):
@@ -128,8 +166,8 @@ def view(job, fresh=False):
     """
     found = viewers()
     old = next((v[0] for v in found.values() if v[1] == "slot"), "")
-    if not old:
-        return False  # the right side isn't a viewer (it died): {right} would be the list, and a swap would hide it
+    if not old:  # the right side died: never swap ({right} is the list itself then), build a new one beside the list
+        return heal(job, found)
     pane_id, where, _, parked = found.get(job, ("", "", 0, False))
     if where == "slot" and not (fresh and parked):
         return True
@@ -145,13 +183,6 @@ def view(job, fresh=False):
     if stale:
         close(stale)
     return not swapped.returncode
-
-
-def set_note(text):
-    """The welcome screen's line on the right ("" for its usual one)."""
-    welcome = viewers().get("welcome", ("",))[0]
-    if welcome:
-        tmux("set-option", "-p", "-t", welcome, "@ap_note", text)
 
 
 def close(pane_id):
@@ -290,10 +321,17 @@ def bind_keys():
     """
     list_pane = pane("list")
     flip = "if-shell -F '#{||:#{window_zoomed_flag},#{@ap_dialog}}' '' 'select-pane -t :.+'"
+    # tmux's own double and triple click select the pane first, 0.3 s after the click that already gave the keys to the
+    # session, and so took them back (the v4.1 runtime tester); in a cockpit the clicks go straight to the app
+    # (only the select-pane goes: a double-click still selects a word in a screen without mouse mode; the second pass)
+    copy = ("if-shell -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send-keys -M' "
+            "'copy-mode -H ; send-keys -X select-%s ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel'")
     click = "run-shell -b \"tmux send-keys -t '#{session_name}:cockpit.{left}' '#{s/^ap-//:mouse_status_range}'\""
     batch([
         ("bind-key", "-n", "C-]", "if-shell", "-F", "#{@ap_cockpit}", flip, "send-keys C-]"),
         ("bind-key", "-n", "MouseDown1Status", "if-shell", "-F", "#{m:ap-*,#{mouse_status_range}}", click, "switch-client -t ="),
+        ("bind-key", "-n", "DoubleClick1Pane", "if-shell", "-F", "#{@ap_cockpit}", copy % "word", "select-pane -t = ; " + copy % "word"),
+        ("bind-key", "-n", "TripleClick1Pane", "if-shell", "-F", "#{@ap_cockpit}", copy % "line", "select-pane -t = ; " + copy % "line"),
         # not while a dialog has zoomed the list: resizing a pane unzooms the window
         ("set-hook", "-w", "-t", WINDOW, "window-resized", f"if-shell -F '#{{window_zoomed_flag}}' '' 'resize-pane -t {list_pane} -x {LIST_WIDTH}'"),
         # closing the terminal (not q) also frees the hidden viewers; quoted: tmux runs hooks through his zsh
