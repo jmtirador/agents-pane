@@ -8,14 +8,14 @@ The shape follows Keep a Changelog (https://keepachangelog.com/en/1.1.0/) and th
 ## [4.1.0] - 2026-10-22
 
 ### Added
-- The right side shows a peek at any session that isn't running (most of them, since Claude Code stops an idle session's process after about an hour): what you asked, its last reply, its recap, what it's doing, and only the keys that work for it. Nothing starts until you press Enter.
+- The right side shows a peek at any session that isn't running (most of them, since Claude Code stops an idle session's process after about an hour): what you asked, its last reply, its recap, and only the keys that work for it. Nothing starts until you press Enter.
 
 ### Changed
 - Find searches a small index of only your prompts, replies, recaps and titles, so a search takes 15 to 300 ms instead of 5 to 14 seconds, and the list no longer swells to several GB while it searches. The index builds once (about 5 seconds) and then reads only what's new.
-- One arrow press shows the next session right away; a quick run of presses still waits for you to stop.
+- One arrow press shows the next session right away. A quick run of presses still waits for you to stop.
 - A session stuck on a permission prompt says what it wants to do, instead of a blank line.
-- Working cards say what they're doing in words on up to two lines; messaging, tool searches, schedules and other common tools no longer show as code names.
-- Cards use Claude Code's own name for a session (your rename first), so they match the right side and agent view.
+- Working cards say what they're doing in plain words on up to two lines. Messaging, tool searches, schedules and other common tools no longer show as code names.
+- Cards use Claude Code's own name for a session (or your rename, if you gave it one), so they match the right side and agent view.
 - A session waiting for more than two hours stays orange but stops pulsing, and nothing pulses while no one has the dashboard open.
 - A reply whose first sentence is one word ("Done.") shows the next sentence too.
 - A chat in the Claude app is described as one, not as a terminal tab.
@@ -23,7 +23,7 @@ The shape follows Keep a Changelog (https://keepachangelog.com/en/1.1.0/) and th
 ### Fixed
 - The right side now follows the highlighted card from the moment the dashboard opens.
 - `u` counts the days you opened the dashboard, not the days its list process happened to start.
-- A double-click on a card no longer leaves your keys in the list.
+- A double-click on a card no longer leaves your typing in the list.
 - If the right side ever closes, the next session you pick brings it back.
 - Find's "still indexing" note no longer hides under a long list of results.
 

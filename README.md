@@ -20,6 +20,8 @@ So I built a split screen in tmux: all my sessions in a list on the left, with t
 
 It works everything out from the files Claude Code already writes, so there's nothing to keep updated by hand.
 
+![A peek at a session that isn't running: what you asked, its last reply and its recap](docs/images/peek.png)
+
 ![The same list in three color themes](docs/images/themes.png)
 
 ## Who it's for
