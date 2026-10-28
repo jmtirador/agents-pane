@@ -1,10 +1,8 @@
-"""The list's dialogs: new session, reply or rename, find an old session, and the read-only notes (keys, usage).
+"""The list's dialogs: reply or rename, find an old session, and the read-only notes (keys, usage).
 
 Every dialog lists its own keys for the bottom bar (KEYS), and the list zooms to the whole window while
 one is open. The words are plain on purpose (problem P5): no symbol-only key names, no abbreviations.
 """
-
-import os
 
 from rich.text import Text
 from textual import on, work
@@ -12,7 +10,6 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.suggester import SuggestFromList
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
@@ -54,7 +51,7 @@ def help_lines(p, version):
             ("ctrl+]", "switch sides, from either side"),
         ],
         "Doing things": [
-            ("n", "start a new session in any folder"),
+            ("n", "start a new chat: type, pick its mode, model and folder"),
             ("r", "reply without leaving the list"),
             ("/", "find an old session by what it was about"),
             ("w", "get a Mac notification when it finishes"),
@@ -96,35 +93,6 @@ class Dialog(ModalScreen):
 
     def action_close(self):
         self.dismiss(None)
-
-
-class NewSession(Dialog):
-    TITLE = "new session"
-    KEYS = [("enter", "start it", "Enter"), ("tab", "next box", "Tab"), ("→", "fill in the folder", "Right"), ("esc", "cancel", "Escape")]
-
-    def __init__(self, folder, folders):
-        super().__init__()
-        self.folder, self.folders = folder, folders
-
-    def body(self):
-        yield Static("What should it do?", classes="label")
-        yield Input(id="prompt", placeholder="enter starts it and shows it on the right")
-        yield Static("Folder", classes="label")
-        yield Input(sessions.tilde(self.folder), id="folder", suggester=SuggestFromList(self.folders, case_sensitive=False))
-        yield Static("Name (optional)", classes="label")
-        yield Input(id="name", placeholder="e.g. finch-fixes")
-        yield Static("It runs on its own without asking permission, like yolo.", classes="hint")
-
-    @on(Input.Submitted)
-    def submit(self):
-        prompt = self.query_one("#prompt", Input).value.strip()
-        folder = os.path.expanduser(self.query_one("#folder", Input).value.strip() or "~")
-        if not prompt:
-            self.query_one("#prompt").focus()
-        elif not os.path.isdir(folder):
-            self.query_one(".hint", Static).update(Text(f"There's no folder at {folder}.", style=f"bold {self.app.current_theme.error}"))
-        else:
-            self.dismiss((folder, self.query_one("#name", Input).value.strip(), prompt))
 
 
 class TypeInto(Dialog):

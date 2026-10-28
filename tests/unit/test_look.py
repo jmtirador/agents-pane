@@ -50,7 +50,7 @@ def everything_he_reads():
         yield f"{key} {what}"
     for line in dialogs.help_lines(NEON, "3.0.0"):
         yield line.plain
-    for dialog in (dialogs.NewSession, dialogs.TypeInto, dialogs.Find, dialogs.Note, dialogs.ThemePicker):
+    for dialog in (dialogs.TypeInto, dialogs.Find, dialogs.Note, dialogs.ThemePicker):
         for key, what, _ in dialog.KEYS:
             yield f"{key} {what}"
 
@@ -236,5 +236,5 @@ def test_the_card_on_the_right_stays_highlighted_while_he_types_to_claude():  # 
 def test_the_blank_row_between_cards_opens_the_card_below():  # F2: half the rows ignored clicks
     rows = [row("w1", "working", name="one"), row("w2", "working", name="two")]
     text, sids = view.render(rows, model.fresh_order(rows), NEON, 41, NOW, 0, selected="w1", live=None, watched=set(), show_quiet=False)
-    gap = [i for i, line in enumerate(text.plain.split("\n")) if line.strip("│ ") == ""][0]
+    gap = [i for i, line in enumerate(text.plain.split("\n")) if line.strip("│ ") == "" and sids[i]][0]  # not the air under "new chat"
     assert sids[gap] == sids[gap + 1] and sids[gap] is not None

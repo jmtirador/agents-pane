@@ -1,16 +1,12 @@
-"""The welcome screen's words fit its box (64 columns, minus the "Tip: " prefix)."""
+"""The right side's words fit it (72 columns inside the new chat's padding), and the peek and the new chat behave."""
 
 from cockpit.theme import PALETTES
-from cockpit.welcome import TIPS, keys_line
+from cockpit.welcome import hints
 
 
-def test_every_tip_fits_on_one_line():
-    assert all(len("Tip: " + tip) <= 60 for tip in TIPS)
-
-
-def test_the_way_back_has_one_name_everywhere():  # P5: it said "back to the list" here and "back to your sessions" in the bar
-    assert "ctrl+] back to your sessions" in keys_line(PALETTES["neon"]).plain
-    assert len(keys_line(PALETTES["neon"]).plain) <= 62
+def test_the_hints_are_one_quiet_line():  # Pepe on the first render: two lines of hints looked incongruent
+    line = hints(PALETTES["neon"]).plain
+    assert "\n" not in line and len(line) <= 72 and "tab mode" in line
 
 
 # ---------------------------------------------------------------- v4.1: the peek (G1)
@@ -38,7 +34,8 @@ def peeked(tmp_path, monkeypatch):
 
 
 def shown(app):
-    return __import__("html").unescape(app.export_screenshot()).replace("\xa0", " ")
+    """The screen as text: the SVG's tags out, so differently styled neighbors ("tab" "mode") read as they look."""
+    return __import__("html").unescape(__import__("re").sub(r"<[^>]+>", "", app.export_screenshot())).replace("\xa0", " ")
 
 
 async def test_a_peek_shows_the_session_what_he_asked_and_its_last_reply(peeked):
@@ -122,3 +119,212 @@ async def test_enter_right_after_esc_still_opens_and_the_hint_goes(peeked):  # s
         await pilot.press("escape", "enter")
         await pilot.pause(0.6)
         assert ("send-keys", "-t", "%1", "Enter") in peeked
+
+
+# ---------------------------------------------------------------- v4.2: the new chat (H1-H3)
+
+from cockpit import chat  # noqa: E402
+
+
+@pytest.fixture
+def composing(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "PATH", str(tmp_path / "state.json"))
+    monkeypatch.setattr(chat, "PATH", str(tmp_path / "new-chat.json"))
+    monkeypatch.setattr(chat, "default_effort", lambda: "xhigh")
+    sent = []
+    monkeypatch.setattr(tmuxctl, "tmux", lambda *args: sent.append(args) or __import__("subprocess").CompletedProcess(args, 0, "", ""))
+    monkeypatch.setattr(tmuxctl, "pane", lambda role: "%1" if role == "list" else "")
+    started = []
+    monkeypatch.setattr(tmuxctl, "start", lambda prompt="", cwd=None, name=None, resume=None, choice=None:
+                        started.append((prompt, cwd, choice)) or ("cafe0001", ""))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    store.write_peek({"compose": True, "folder": str(repo), "folders": [str(repo), str(tmp_path)]})
+    return started, sent, repo
+
+
+async def test_the_new_chat_is_one_box_with_its_mode_model_and_effort(composing):
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.3)
+        text = shown(app)
+        assert "anything" in text and "Yolo" in text and "xhigh" in text and ":main" in text
+        assert "tab mode" in text and "ctrl+f folder" in text and "▀▀▀▀" in text  # OpenCode's shallow edge under the box
+
+
+async def test_a_long_mode_line_keeps_a_gap_and_the_branch(composing, monkeypatch, tmp_path):  # the 4.2 README picture:
+    monkeypatch.setattr(chat, "default_effort", lambda: "")  # "default effort~/Projects/agents-pan…", the branch cut off
+    monkeypatch.setattr(welcome.sessions, "HOME", str(tmp_path))
+    repo = tmp_path / "Projects" / "agents-pane"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/master\n")
+    store.write_peek({"compose": True, "folder": str(repo), "folders": [str(repo)]})
+    app = welcome.Welcome()
+    app.choice = {"mode": "edits", "model": "", "effort": ""}  # the longest line: Accept edits · default model · default effort
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.3)
+        info, folder = app.query_one("#info"), app.query_one("#folder-line")
+        text = folder.render().plain
+        assert text == "…/agents-pane:master" and len(text) <= folder.size.width  # never cut by the ellipsis
+        assert folder.region.x - info.region.right >= 2
+
+
+def drawn_on(app, selector):
+    """The backgrounds a widget's first line is drawn with."""
+    return {seg.style.bgcolor.name if seg.style and seg.style.bgcolor else None for seg in app.query_one(selector).render_line(0)}
+
+
+async def test_a_viewer_started_before_the_list_wrote_anything_draws_the_whole_box(tmp_path, monkeypatch):  # the 4.2
+    monkeypatch.setattr(store, "PATH", str(tmp_path / "state.json"))  # README demo: an empty mode line on the terminal's
+    monkeypatch.setattr(chat, "PATH", str(tmp_path / "new-chat.json"))  # own background, then the panel color painted
+    monkeypatch.setattr(chat, "default_effort", lambda: "xhigh")  # over the box but never behind its text
+    monkeypatch.setattr(tmuxctl, "launch_folder", lambda: str(tmp_path))
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.3)
+        assert "Yolo" in shown(app)
+        store.write_peek({"compose": True, "folder": str(tmp_path), "folders": [str(tmp_path)]})  # the list, a moment later
+        await pilot.pause(0.4)
+        panel = PALETTES["neon"].sel
+        assert drawn_on(app, "#info") == {panel} and drawn_on(app, "#folder-line") == {panel}
+
+
+async def test_tab_ctrl_l_and_ctrl_t_change_the_mode_model_and_effort(composing):
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)  # past the double-Tab guard
+        await pilot.press("tab", "ctrl+l", "ctrl+t")
+        await pilot.pause(0.2)
+        text = shown(app)
+        assert "Auto" in text and "Opus" in text and "low" in text
+        await pilot.press("shift+tab")
+        await pilot.pause(0.2)
+        assert "Yolo" in shown(app)
+
+
+async def test_enter_starts_it_here_with_the_choices_and_remembers_them(composing):
+    started, _, repo = composing
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        await pilot.press("tab", "tab")  # Plan
+        await pilot.press(*"fix it", "ctrl+j", *"then test", "enter")
+        await pilot.pause(0.3)
+        assert started == [("fix it\nthen test", str(repo), {"mode": "plan", "model": "", "effort": ""})]
+        assert app.return_value == "cafe0001"
+    assert chat.load()["mode"] == "plan"
+
+
+async def test_a_session_that_wont_start_keeps_the_text_and_says_why(composing, monkeypatch):  # the critic: auto can refuse
+    monkeypatch.setattr(tmuxctl, "start", lambda *a, **k: (None, "Auto mode isn't available yet: run claude --permission-mode auto once"))
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        await pilot.press(*"fix it", "enter")
+        await pilot.pause(0.3)
+        assert "isn't available yet" in shown(app) and app.query_one("TextArea").text == "fix it"
+
+
+async def test_a_double_tab_does_not_flip_the_mode(composing):  # the critic: Tab in the list, then Tab again
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.05)
+        app.composer_focused()  # the keys just arrived
+        await pilot.press("tab")
+        await pilot.pause(0.1)
+        assert "Yolo" in shown(app)
+
+
+async def test_esc_gives_the_keys_back_and_keeps_the_draft(composing):
+    _, sent, _ = composing
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        await pilot.press(*"half a thought", "escape")
+        await pilot.pause(0.2)
+        assert ("select-pane", "-t", "%1") in sent and app.query_one("TextArea").text == "half a thought"
+
+
+async def test_ctrl_f_picks_another_folder(composing, tmp_path):
+    started, _, _ = composing
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        await pilot.press("ctrl+f")
+        await pilot.pause(0.2)
+        assert "enter start here" in shown(app) and "esc cancel" in shown(app) and "tab mode" not in shown(app)  # the keys that work now
+        await pilot.press("down", "enter")
+        await pilot.pause(0.2)
+        assert "tab mode" in shown(app)
+        await pilot.press(*"go", "enter")
+        await pilot.pause(0.3)
+        assert started and started[-1][1] == str(tmp_path)
+
+
+async def test_the_folder_list_keeps_the_keys_when_they_come_back(composing, tmp_path):  # review 2: Enter started in the old folder
+    started, _, _ = composing
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        await pilot.press(*"go", "ctrl+f")
+        await pilot.pause(0.2)
+        app.on_app_focus()  # the keys went to the list and came back
+        await pilot.pause(0.2)
+        await pilot.press("down", "enter")
+        await pilot.pause(0.2)
+        assert app.folder == str(tmp_path) and "tab mode" in shown(app)
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert started and started[-1][1] == str(tmp_path)
+
+
+async def test_the_double_tab_that_brings_the_keys_back_leaves_the_folder_list_open(composing):  # second review
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        await pilot.press("ctrl+f")
+        await pilot.pause(0.2)
+        app.on_app_focus()  # the first Tab, in the list, brought the keys here
+        await pilot.press("tab")  # the second one lands in the folder list
+        await pilot.pause(0.2)
+        assert app.query_one(welcome.Folders).display and app.focused is app.query_one(welcome.Folders)
+
+
+async def test_tab_in_the_folder_list_closes_it(composing):  # review 2: the list and its hints stayed up
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        await pilot.press("ctrl+f", "tab")
+        await pilot.pause(0.2)
+        assert not app.query_one(welcome.Folders).display and "tab mode" in shown(app)
+
+
+async def test_a_backslash_before_the_cursor_makes_a_new_line_there(composing):  # review 2: it ate the next character
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        await pilot.press(*"ab\\c", "left", "enter")
+        await pilot.pause(0.2)
+        assert app.query_one(welcome.Prompt).text == "ab\nc"
+        await pilot.press("end", "\\", "enter")
+        await pilot.pause(0.2)
+        assert app.query_one(welcome.Prompt).text == "ab\nc\n"
+
+
+async def test_a_folder_that_is_gone_is_said_not_started_in_home(composing, tmp_path):  # review 2: the old form refused it
+    started, _, _ = composing
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 27)) as pilot:
+        await pilot.pause(0.6)
+        app.folder, app.picked = str(tmp_path / "deleted-worktree"), True
+        await pilot.press(*"go", "enter")
+        await pilot.pause(0.3)
+        assert not started and "no folder" in shown(app) and app.query_one(welcome.Prompt).text == "go"
+
+
+async def test_a_short_pane_keeps_the_box_and_drops_the_wordmark(composing):  # the critic: 22 rows overflowed
+    app = welcome.Welcome()
+    async with app.run_test(size=(76, 16)) as pilot:
+        await pilot.pause(0.3)
+        assert "anything" in shown(app) and not app.query_one(welcome.Mark).display  # the bar is blocks too, so ask the widget

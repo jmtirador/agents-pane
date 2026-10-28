@@ -99,6 +99,8 @@ def test_q_closes_the_dashboard_and_frees_the_hidden_viewers(rig):  # F4
 
 def test_a_dead_right_side_comes_back_and_never_takes_the_list(rig):  # the v4 review, then the v4.1 runtime tester
     two_sessions(rig)
+    # the opening switch lands first: killing the welcome screen under it had that switch build the right side again
+    rig.wait_for(lambda: rig.option("live", "@ap_job") in (A, B), "a session on the right")  # (2 runs in 20, before 4.2)
     listp = rig.panes()["list"]
     rig.tmux("kill-pane", "-t", rig.panes()["live"])
     rig.wait_for(lambda: list(rig.panes()) == ["list"], "only the list left")
@@ -128,7 +130,7 @@ def test_a_cockpit_from_before_4_is_rebuilt(rig):  # its right side ran live.py,
     assert rig.option("live", "@ap_job") == "welcome"  # rebuilt (pane ids can repeat: the server restarts)
 
 
-@pytest.mark.parametrize("dialog", ["n", "/", "?"])
+@pytest.mark.parametrize("dialog", ["r", "/", "?"])
 def test_a_switch_that_lands_under_a_dialog_leaves_the_list_in_place(rig, dialog):  # the v4 stress test: 7 in 7 broke
     two_sessions(rig)
     rig.press("Down", dialog)  # the switch lands 0.12 s later, under the dialog that zoomed the list

@@ -81,8 +81,9 @@ class Rig:
         self.wait_for(lambda: self.panes().keys() == {"list", "live"}, "the two cockpit panes")
 
     def panes(self):
-        out = self.tmux("list-panes", "-t", "=agents:cockpit", "-F", "#{@ap_role} #{pane_id}").stdout.split()
-        return dict(zip(out[::2], out[1::2], strict=True))
+        """{role: pane id}; a pane split a moment ago has no role yet and is skipped (it broke zip, 1 run in ~5)."""
+        lines = self.tmux("list-panes", "-t", "=agents:cockpit", "-F", "#{@ap_role} #{pane_id}").stdout.splitlines()
+        return dict(line.split() for line in lines if len(line.split()) == 2)
 
     def option(self, role, name):
         return self.tmux("display-message", "-p", "-t", self.panes()[role], f"#{{{name}}}").stdout.strip()

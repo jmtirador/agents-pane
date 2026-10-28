@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 
+from . import chat
 from .theme import Palette
 
 SESSION = os.environ.get("AGENTS_PANE_SESSION", "agents")  # "agents-preview" runs a branch beside the real cockpit
@@ -379,9 +380,10 @@ def claude(*args, cwd=None):
     return done.returncode, ANSI.sub("", done.stdout + done.stderr).strip()
 
 
-def start(prompt="", cwd=None, name=None, resume=None):
-    """Start (or resume) a background session; returns (its id, '') or (None, why it failed)."""
-    args = ["--bg", "--dangerously-skip-permissions"]
+def start(prompt="", cwd=None, name=None, resume=None, choice=None):
+    """Start (or resume) a background session; returns (its id, '') or (None, why it failed).
+    choice: the new chat's mode, model and effort (cockpit/chat.py); none is yolo with his defaults."""
+    args = ["--bg", *chat.flags(choice or chat.DEFAULT)]
     if name:
         args += ["-n", name]
     if resume:

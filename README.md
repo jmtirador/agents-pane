@@ -14,13 +14,15 @@ So I built a split screen in tmux: all my sessions in a list on the left, with t
 - Shows a session that's waiting on you (a question or a permission prompt) in orange, so you notice it.
 - Shows the session you're on, live, on the right; switching back to one you've looked at is instant, and the others keep running in the background.
 - For a session that isn't running, shows a peek on the right instead: what you asked, what it last said and its recap, without starting it.
-- Lets you start a new session, reply to one without opening it, or search old sessions by what they were about, in well under a second.
+- Lets you start a new chat from a chat box (pick its mode, model, effort and folder), reply to one without opening it, or search old sessions by what they were about, in well under a second.
 - Shows what each session is doing right now in plain words, and the whole question when one is waiting on you.
 - Comes with three color themes.
 
 It works everything out from the files Claude Code already writes, so there's nothing to keep updated by hand.
 
 ![A peek at a session that isn't running: what you asked, its last reply and its recap](docs/images/peek.png)
+
+![A new chat: one chat box on the right, with its mode, model, effort and folder under the text](docs/images/newchat.png)
 
 ![The same list in three color themes](docs/images/themes.png)
 
@@ -60,7 +62,8 @@ bin/agents-pane
 - `↑↓` or `j k` pick a session, and the right side shows it: live if it's running, else a peek at what you asked and what it said, with the keys that work for it.
 - One click on a card, or Enter, puts you in that session to type; Ctrl+] (or a click on the list) brings you back to your sessions. Enter also switches to a chat in another tmux window, and restarts an ended session in the background.
 - Leaving a session from inside Claude Code (Ctrl+C twice, `←`, `/exit` or Ctrl+Z) brings the same session back and puts you in the list again.
-- `n` starts a session in any folder, `r` replies without opening it, and `/` finds old sessions by what they were about.
+- `n` (or `+ new chat` at the top of the list) gives you a chat box on the right: type, and Enter starts it there. Tab changes the mode (Yolo, Auto, Plan, Accept edits, Manual), ctrl+l the model, ctrl+t the effort and ctrl+f the folder.
+- `r` replies without opening a session, and `/` finds old sessions by what they were about.
 - `w` sends a Mac notification when a session finishes, `S` twice stops one (Enter brings it back), `X` twice deletes it for good, `e` shows the idle ones, `t` opens the theme menu, and `?` lists every key.
 - `q` or Ctrl+C in the list closes the dashboard; everything keeps running.
 - `bin/find-session invoice export` searches old sessions for "invoice export" from any terminal.
@@ -74,7 +77,7 @@ bin/agents-pane
 - `cockpit/app.py` is the list, built with Textual (a Python library for terminal apps): cards, dialogs, keys and clicks; `cockpit/view.py` draws the cards and `cockpit/model.py` holds the ordering rules, both pure and tested.
 - `cockpit/viewer.py` runs one `claude attach` per session you've looked at; `cockpit/tmuxctl.py` keeps up to four of them warm in a hidden tmux session and swaps the one you pick onto the right side, so a switch takes milliseconds and tmux never re-creates a pane (tmux 3.7c can crash when it does). [Decision 0006](docs/decisions/0006-warm-viewers.md) has the reasoning.
 - `cockpit/tmuxctl.py` also holds the other tmux and `claude` commands: the frame, the key bar, typing a reply, starting and stopping sessions.
-- `cockpit/welcome.py` draws the peek for a session that isn't running (and the welcome screen when there's nothing to peek at); `cockpit/search.py` keeps find's index of only the searchable text, so a search reads megabytes, not every transcript.
+- `cockpit/welcome.py` draws the peek for a session that isn't running and the new chat's box, and `cockpit/chat.py` turns its mode, model and effort into `claude` flags; `cockpit/search.py` keeps find's index of only the searchable text, so a search reads megabytes, not every transcript.
 - `docs/progress.md` is the build log, and `CHANGELOG.md` says what each version changed.
 
 ## Develop

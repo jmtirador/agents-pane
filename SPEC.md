@@ -69,16 +69,17 @@ Contract: the glyph is what a file proves, the order is who needs you first, the
 - The terminal paints the background everywhere (decision 0002); the window and the bar ask for `bg=default`, and the list's empty space is Textual's `ansi_default`.
 - tmux draws one single-line divider in the frame gray (`line`), the same color whichever side has focus, plus one plain line across both sides over the key bar (`pane-border-status bottom` with an empty format), and nothing else: no pane titles, no indicators (decision 0003 and its amendment).
 - The list's first box is its own header: a thin rounded box named `agents` (bold while the list has focus) saying `N waiting` in bold orange, `N working` in the work color and `N done` in the done color, in words, or `nothing running`.
-- Each band is a thin rounded box in the frame gray with its name in the top line in the band's color (`╭─ Working ───╮`), like the welcome screen's box; its cards sit inside.
+- Each band is a thin rounded box in the frame gray with its name in the top line in the band's color (`╭─ Working ───╮`), like the dialogs; its cards sit inside.
 - Boxes mean "a group": single cards, the idle line, the find line and the Claude side are never boxed.
 - The bottom bar is quiet text, never chips: each key in the theme's key color and what it does in gray, three spaces apart, and the clock on the right; the only bold is `N waiting for you` on the Claude side.
 - In the list the bar says `↑↓ pick   enter open   n new   / find   t theme   ? all keys   q close`; on the Claude side it says `ctrl+] back to your sessions   close`, plus `N waiting for you` on the right when anything waits.
 - A double or triple click in the cockpit goes straight to the app (tmux's own selects the pane first, which took the keys back from the session a click had just opened); elsewhere they do what tmux does.
 - Every key in the bar is clickable; a click presses that key in the list (`ctrl+]` sends F12, because a `]` can't be in a click range name, and the Claude side's `close` sends `q`).
+- The list's first row, under the header, is ` + new chat` with `n` on the right: the cursor can rest on it like a card, and then the right side shows the new chat (see below).
 - The list's last row is ` / find an old session`, which opens find when clicked.
 - While Claude has the keys the list dims: the header and band titles go gray, nothing is bold except the waiting card and the header's waiting count, project colors fade halfway to the background; a waiting card keeps pulsing, and the cursor's card keeps its lighter background, since it is the session on the right.
-- While a dialog is open the list pane zooms to the whole window, the bar shows that dialog's own keys (`enter start it`, `esc cancel` and so on), and the space goes back after.
-- Dialogs, their inputs and the welcome box are rounded lines in the frame gray with no fill, like Claude Code's prompt box, on the terminal's own background; the focused input's line is in the key color, and the welcome box's one input is a filled bar with no line of its own.
+- While a dialog is open the list pane zooms to the whole window, the bar shows that dialog's own keys (`enter send`, `esc cancel` and so on), and the space goes back after.
+- Dialogs and their inputs are rounded lines in the frame gray with no fill, like Claude Code's prompt box, on the terminal's own background; the focused input's line is in the key color.
 - While any dialog is open the list sets `@ap_dialog` on its session (with the dialog's keys in the bar), and Ctrl+] waits for it to close, zoomed or not.
 - Toasts sit at the top of the list and go away after 3 s (at the bottom they covered the last cards and ate clicks); they span the list's width so they don't wrap (a title line, then the message), in the same thin rounded line (the warning and error ones in their state color).
 
@@ -98,7 +99,12 @@ Contract: the glyph is what a file proves, the order is who needs you first, the
 - A pane is closed only when it isn't in the cockpit window, so a race can't close the right side.
 - The peek is drawn by the viewer `welcome` from a file the list writes (`store.write_peek`), checked with a stat 20 times a second; it has no input: typing shows a hint and does nothing, Enter or `r` pressed on their own act on the card through the list, and Esc, Tab or an arrow give the keys back. Swapping a running session in blanks the peek behind it.
 - If the right side ever dies, the next switch builds a new one beside the list (`split-window`; nothing is re-created in place).
-- The welcome screen proper, shown only when there's no card to peek at, is the same viewer: the AGENTS wordmark fading from the theme's own color to the key color (kept on purpose: he called it "awesome"), a line saying "Pick a session on the left, or start a new one here." (or where the cursor's session is), a box titled `new session` that starts one in the folder `yolo` was run from and attaches it in place, the two keys that matter in words, and one tip a day.
+- The new chat (problems H1-H3, after OpenCode's home screen) is the same viewer, shown while the cursor is on `+ new chat` and when there are no sessions: the AGENTS wordmark fading from the theme's own color to the key color (kept on purpose: he called it "awesome"), then one chat box at most 72 columns wide.
+  The box is OpenCode's: a heavy bar in the mode's color on the terminal's background, a raised panel one step lighter (the cursor card's color) holding the text and a line `Mode · model · effort` on the left with the folder and its git branch on the right, and a half-height bottom edge (`╹▀▀▀`).
+  Under it one quiet line names the keys that work right now (`tab mode   ctrl+l model   ctrl+t effort   ctrl+f folder`, or the picker's keys while it is open), and a failed start says why there, keeping the text; so does a folder that's gone (the old form refused it too; `claude` would have started in `~`).
+  On a short pane the wordmark goes first, then the hints; the box always stays.
+- Enter starts `claude --bg` in that folder with the mode's flags (`--dangerously-skip-permissions` for Yolo, `--permission-mode auto|plan|acceptEdits|manual` for the rest) and `--model`/`--effort` only when picked; the viewer then attaches the new session in place, with the keys.
+  The mode, model and effort are saved to `~/.claude/agents-pane/new-chat.json` once a session really starts, and the next new chat begins with them; a session brought back keeps its own mode from its transcript.
 
 ## Data (measured 2026-10-06)
 
@@ -157,7 +163,13 @@ When the selected session disappears, the card that slid into its place is selec
 - One click on a card opens it: on the right, with the keys (a chat it can't show gets the note); a click on the idle line toggles it, the find line opens find, and every key in the bar presses that key in the list.
 - Enter opens: a background session goes on the right and gets the keys (a stopped one comes back through `claude attach`); a chat in another tmux pane is switched to; an ended session is resumed in the background and shown.
 - Tab in the list always moves the keys to the Claude side; Ctrl+] anywhere in the cockpit switches sides once per press, and does nothing while a dialog is open.
-- `n` new session: what it should do, the folder (defaults to where `yolo` ran, with suggestions), an optional name.
+- `n` puts the cursor on `+ new chat` and gives the chat box the keys. In the box:
+  - Enter starts it; ctrl+j, or a `\` just before the cursor, adds a line (his tmux sends shift+Enter as a plain Enter).
+  - `n`, Enter or a click on `+ new chat` always puts a box up, even in the second before the list sees that the last box became a session.
+  - Tab and shift+Tab cycle the mode: Yolo (runs everything without asking), Auto (runs everything, with Claude's safety checks), Plan (reads and plans, edits nothing), Accept edits, Manual. A second Tab within 0.4 s of the keys arriving is the double-tap that brought them, and changes nothing.
+  - ctrl+l cycles the model (his default, Opus, Sonnet, Haiku, Fable); ctrl+t the effort (his default from settings.json, low, medium, high, xhigh, max).
+  - ctrl+f lists the folders it can start in (where `yolo` ran, his sessions' folders that still exist, `~/Projects/*`) where the wordmark was; ↑↓ and Enter pick, Esc or Tab keeps the one it had, and the list keeps the keys if they leave and come back.
+  - Esc gives the keys back to the list and keeps the draft.
 - `r` reply: shows the question or the last thing it said, then types the answer into the session through a hidden tmux window; a question with choices opens the session instead.
 - `R` rename (types `/rename` the same way); `w` a Mac notification when it goes from working to anything else, then the mark clears; `S` twice stops; `X` twice removes; `e` shows or hides idle sessions; `t` opens the theme menu; `u` how often he's used it; `?` all keys, grouped as Moving around, Doing things and Managing, in plain words, with the version at the bottom.
 - `q` or Ctrl+C in the list closes the dashboard (Ctrl+C closes an open dialog first); every session keeps running.

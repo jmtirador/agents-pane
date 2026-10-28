@@ -61,3 +61,14 @@ Root cause, measured: 17 of his 20 sessions weren't running, and for those the r
 
 Not building without his say (forks for Pepe): a "Left open" band for sessions that ended on a question or offer at any age, number keys that answer a question's choices from the list, and a pin that keeps a session attached.
 The header box and band boxes stay: he asked for them on 2026-10-08.
+
+## v4.2 (2026-10-27): a new chat feels like a chat
+
+Source: Pepe on 2026-10-27, about the new-session form (`n`): "i don't know if i like this pane... i really like the one that's kind of like copying open code where it just says 'agents.' i wish that was the screen for a new chat. feels like a chat box", and he wants it "very similar to open code... as fluid and as smooth, and be able to choose all the different modes".
+A research agent mapped OpenCode 1.19.4's home screen from its source and docs (a centered logo, one prompt box with a bar in the agent's color, an "agent · model · effort" line, Tab cycling agents, ctrl+t the thinking level, a model picker); `claude --bg` was checked on a throwaway session to honor `--permission-mode`, `--model` and `--effort` (Claude Code 2.1.312).
+
+| ID | When I… | I see / do… | Which costs… | Fixed when (the check) | Status |
+|---|---|---|---|---|---|
+| H1 | press `n` to start a chat | a full-window form with three boxes (what, folder, name) | it feels like paperwork, not a chat | `n` puts the AGENTS screen on the right with the keys in one chat box; Enter starts the session there and the same screen becomes it (app and welcome tests, pictures) | fixed in 4.2.0 (app, welcome and picture tests; a real-tmux test types a chat and starts it) |
+| H2 | want a session in plan mode, on Sonnet, or at low effort | every session starts as yolo with my default model and effort | no way to pick | Tab and shift+Tab cycle the mode (Yolo, Auto, Plan, Accept edits, Manual), ctrl+l the model (my default, Opus, Sonnet, Haiku, Fable), ctrl+t the effort; the choice shows under the text in the mode's color and is remembered (unit and welcome tests; a real session started in plan on Sonnet) | fixed in 4.2.0 (unit and welcome tests; throwaway sessions honored plan, sonnet, low and max) |
+| H3 | start a chat in another folder | a text box with suggestions | slow to change | ctrl+f opens a short list of folders (where `yolo` ran, my sessions' folders, ~/Projects/*) right above the box; the folder and its git branch show under it (welcome test) | fixed in 4.2.0 (welcome test; it opens where the wordmark was) |

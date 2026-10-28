@@ -1,11 +1,12 @@
 """What the list does when keys are pressed: which session goes live, what tmux is asked, what needs two presses."""
 
 import json
+import threading
 
 import pytest
 from helpers import row
 
-from cockpit import store, tmuxctl
+from cockpit import search, store, tmuxctl
 
 
 def gave_keys(cockpit, pane):
@@ -33,7 +34,7 @@ async def test_the_list_marks_its_own_session_as_a_cockpit(cockpit):
 async def test_a_dialog_takes_the_whole_window_and_gives_it_back(cockpit):
     async with cockpit.app.run_test(size=(42, 28)) as pilot:
         await cockpit.settle(pilot)
-        await pilot.press("n")
+        await pilot.press("slash")
         await cockpit.settle(pilot)
         assert cockpit.tmux.zoomed
         await pilot.press("escape")
@@ -349,12 +350,12 @@ async def test_a_peek_offers_only_the_keys_that_work_for_it(cockpit):  # G1: "en
 # ---------------------------------------------------------------- the v4.1 review
 
 
-async def test_with_every_card_idle_the_right_side_is_the_welcome_screen(cockpit):  # review 1: yesterday's peek stayed
+async def test_with_every_card_idle_the_right_side_is_the_new_chat(cockpit):  # review 1: yesterday's peek stayed
     cockpit.rows[:] = [row("old-dddd", "idle", name="old work", alive=False)]
     store.write_peek({"name": "yesterday's session", "keys": []})
     async with cockpit.app.run_test(size=(42, 28)) as pilot:
         await cockpit.settle(pilot, 1.5)
-        assert store.read_peek() == {} and cockpit.tmux.slot_job == "welcome"
+        assert store.read_peek()["compose"] and cockpit.tmux.slot_job == "welcome"
 
 
 async def test_a_peek_follows_its_session_while_he_rests_on_it(cockpit):  # review 2: the header froze
@@ -403,3 +404,157 @@ async def test_enter_right_after_moving_onto_a_chat_elsewhere_still_shows_its_pe
         screen.action_open()  # Enter before the move settled: it switches to that window, and the right side follows
         await cockpit.settle(pilot, 0.5)
         assert cockpit.tmux.slot_job == "welcome" and store.read_peek()["name"] == "two"
+
+
+# ---------------------------------------------------------------- v4.2: a new chat feels like a chat (H1-H3)
+
+
+async def test_n_puts_the_new_chat_on_the_right_with_the_keys(cockpit):  # H1: it was a three-box form
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        screen = cockpit.app.screen
+        peek = store.read_peek()
+        assert screen.selected == "new" and peek["compose"] and peek["folder"] == tmuxctl.launch_folder()
+        assert cockpit.tmux.slot_job == "welcome" and gave_keys(cockpit, cockpit.tmux.viewers["welcome"])
+
+
+async def test_the_new_chat_stays_while_he_types(cockpit):  # the design critic: the list replaced it within a second
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 2.5)  # snapshots and keep_right run meanwhile
+        assert cockpit.app.screen.selected == "new" and store.read_peek()["compose"] and cockpit.tmux.slot_job == "welcome"
+
+
+async def test_the_new_chat_row_sits_above_the_first_card(cockpit):
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        screen = cockpit.app.screen
+        first = screen.card_sids()[1]
+        screen.select(first)
+        await pilot.press("up")
+        assert screen.selected == "new"
+        await pilot.press("down")
+        assert screen.selected == first
+
+
+async def test_with_no_sessions_the_right_side_is_a_new_chat(cockpit):
+    cockpit.rows[:] = []
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        assert cockpit.app.screen.selected == "new" and store.read_peek()["compose"]
+
+
+async def test_n_after_starting_a_chat_brings_the_box_back(cockpit):  # review 2: the new session kept the right side
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        # Enter in the box: the welcome viewer becomes the new session's viewer, in the same pane
+        cockpit.rows.append(row("cafe0001-x", "working", name="write the readme"))
+        cockpit.tmux.viewers = {"cafe0001": cockpit.tmux.viewers.pop("welcome")}
+        cockpit.tmux.slot_job = "cafe0001"
+        await cockpit.settle(pilot, 1.5)
+        assert cockpit.app.screen.live == "cafe0001"
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        assert cockpit.tmux.slot_job == "welcome" and store.read_peek()["compose"]
+
+
+async def test_n_before_the_list_has_seen_the_new_session_still_brings_the_box_back(cockpit):  # review 2, in real tmux:
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:  # the list reads the right side once a second
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        cockpit.tmux.viewers = {"cafe0001": cockpit.tmux.viewers.pop("welcome")}  # the box became the session's viewer
+        cockpit.tmux.slot_job = "cafe0001"
+        await pilot.press("n")  # at once, before the list's next look
+        await cockpit.settle(pilot, 0.2)
+        assert cockpit.tmux.slot_job == "welcome"
+
+
+async def test_a_look_that_saw_the_session_before_n_does_not_undo_the_box(cockpit):  # second review: the list and the
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:  # right side disagreed until the next move
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        cockpit.rows.append(row("cafe0001-x", "working", name="write the readme"))
+        cockpit.tmux.viewers = {"cafe0001": cockpit.tmux.viewers.pop("welcome")}
+        cockpit.tmux.slot_job = "cafe0001"
+        screen = cockpit.app.screen
+        asked = screen.switches  # a look starts, and sees the new session...
+        await pilot.press("n")  # ...while n is handled on the UI thread
+        await cockpit.settle(pilot, 0.2)
+        screen.went_live("cafe0001", False, asked)  # then its answer lands
+        await cockpit.settle(pilot, 0.2)
+        assert cockpit.tmux.slot_job == "welcome" and screen.live is None and screen.selected == "new"
+
+
+async def test_a_look_queued_before_n_but_run_after_it_does_not_undo_the_box(cockpit):  # third review: the count was
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:  # read when the look ran, not when it was queued
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        cockpit.rows.append(row("cafe0001-x", "working", name="write the readme"))
+        await cockpit.settle(pilot, 1.2)
+        screen = cockpit.app.screen
+        busy = threading.Event()
+        screen.tmux_calls.submit(busy.wait)  # the tmux thread is still on an earlier call
+        cockpit.tmux.viewers = {"cafe0001": cockpit.tmux.viewers.pop("welcome")}  # the box became the session's viewer
+        cockpit.tmux.slot_job = "cafe0001"
+        screen.background(screen.read_slot)  # a look, queued behind that call
+        await pilot.press("n")  # its switch queued behind the look
+        busy.set()
+        await cockpit.settle(pilot, 2.5)  # and two more looks
+        assert cockpit.tmux.slot_job == "welcome" and screen.live is None and screen.selected == "new"
+
+
+async def test_n_then_the_new_sessions_card_appearing_keeps_the_box(cockpit):  # third review: an old pending moved the
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:  # cursor to it, and the box was swapped away
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        cockpit.tmux.viewers = {"cafe0001": cockpit.tmux.viewers.pop("welcome")}  # before its card exists
+        cockpit.tmux.slot_job = "cafe0001"
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        cockpit.rows.append(row("cafe0001-x", "working", name="write the readme"))  # the card shows up a tick later
+        await cockpit.settle(pilot, 1.5)
+        assert cockpit.app.screen.selected == "new" and cockpit.tmux.slot_job == "welcome"
+
+
+async def test_the_new_chat_offers_only_folders_that_exist(cockpit, tmp_path):  # review 2: a deleted worktree started in ~
+    gone = str(tmp_path / "deleted-worktree")
+    cockpit.rows[:] = [row("gone-eeee", "idle", cwd=gone), row("here-ffff", "idle", cwd=str(tmp_path))]
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        await pilot.press("n")
+        await cockpit.settle(pilot, 0.4)
+        folders = store.read_peek()["folders"]
+        assert str(tmp_path) in folders and gone not in folders
+
+
+async def test_a_session_found_with_find_comes_back_in_its_mode(cockpit, tmp_path, monkeypatch):  # review 2: it came back as yolo
+    path = tmp_path / "old.jsonl"
+    path.write_text('{"type": "permission-mode", "permissionMode": "plan"}\n')
+    monkeypatch.setattr(search, "read_meta", lambda sid: {"path": str(path), "cwd": str(tmp_path)})
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        cockpit.app.screen.found({"sid": "old-gggg", "cwd": str(tmp_path), "name": "old plan"})
+        await cockpit.settle(pilot, 0.5)
+        assert cockpit.started[-1]["resume"] == "old-gggg" and cockpit.started[-1]["choice"]["mode"] == "plan"
+
+
+async def test_bringing_a_session_back_keeps_its_mode(cockpit):  # the design critic: plan sessions came back as yolo
+    cockpit.rows[:] = [row("old-dddd", "idle", name="old plan", jobId=None, alive=False, mode="plan")]
+    async with cockpit.app.run_test(size=(42, 28)) as pilot:
+        await cockpit.settle(pilot, 1.5)
+        screen = cockpit.app.screen
+        screen.action_quiet()
+        screen.select("old-dddd")
+        screen.action_open()
+        await cockpit.settle(pilot, 0.5)
+        assert cockpit.started[-1]["resume"] == "old-dddd" and cockpit.started[-1]["choice"]["mode"] == "plan"

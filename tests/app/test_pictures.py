@@ -13,7 +13,7 @@ import pytest
 from helpers import NOW, row
 
 from cockpit import app as appmod
-from cockpit import store, tmuxctl, welcome
+from cockpit import chat, store, tmuxctl, welcome
 
 HOME = os.path.expanduser("~")
 # his 119x29 terminal less the key bar and the line over it: every pane is 27 rows
@@ -64,7 +64,7 @@ def theme(name):
 
 
 async def no_blink(pilot):
-    for field in pilot.app.screen.query("Input"):
+    for field in pilot.app.screen.query("Input, TextArea"):
         field.cursor_blink = False
     await pilot.pause(0.3)
 
@@ -87,20 +87,30 @@ def test_the_theme_menu_trying_mission(still, snap_compare):
     assert snap_compare(still.app, terminal_size=LIST, press=["t", "down"], run_before=no_blink)
 
 
-def test_the_new_session_dialog(still, snap_compare):
-    async def open_it(pilot):
-        await pilot.press("n")
-        await no_blink(pilot)
-
-    assert snap_compare(still.app, terminal_size=ZOOMED, run_before=open_it)
-
-
 def test_all_keys(still, snap_compare):
     assert snap_compare(still.app, terminal_size=ZOOMED, press=["question_mark"], run_before=no_blink)
 
 
-def test_the_welcome_screen(monkeypatch, tmp_path, snap_compare):
+@pytest.fixture
+def new_chat(monkeypatch, tmp_path):
+    """The new chat with nothing of his: a fixed folder and branch, his default effort, no remembered choice."""
     monkeypatch.setattr(store, "PATH", str(tmp_path / "state.json"))
+    monkeypatch.setattr(chat, "PATH", str(tmp_path / "new-chat.json"))
+    monkeypatch.setattr(chat, "default_effort", lambda: "xhigh")
     monkeypatch.setattr(tmuxctl, "launch_folder", lambda: f"{HOME}/Projects/storefront")
-    monkeypatch.setattr(welcome, "tip", lambda day=None: welcome.TIPS[1])
-    assert snap_compare(welcome.Welcome(), terminal_size=LIVE, run_before=no_blink)
+    monkeypatch.setattr(welcome, "branch", lambda folder: "main")
+    store.write_peek({"compose": True, "folders": [f"{HOME}/Projects/api", f"{HOME}/Projects/docs-site"]})
+    return welcome.Welcome()
+
+
+def test_the_new_chat(new_chat, snap_compare):  # v4.2: OpenCode's home screen, one chat box (problems H1)
+    assert snap_compare(new_chat, terminal_size=LIVE, run_before=no_blink)
+
+
+def test_the_new_chat_in_plan_mode_picking_a_folder(new_chat, snap_compare):
+    async def plan_and_folders(pilot):
+        await pilot.pause(welcome.TAB_GUARD_S + 0.1)  # past the double-tap guard, so Tab changes the mode
+        await pilot.press("tab", "tab", "ctrl+f")
+        await no_blink(pilot)
+
+    assert snap_compare(new_chat, terminal_size=LIVE, run_before=plan_and_folders)

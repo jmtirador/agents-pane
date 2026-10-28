@@ -233,11 +233,14 @@ def local_time(ms, fmt):
 
 
 def read_head(path):
-    """First typed prompt, first auto title, any custom title and the working folder."""
-    head = {"firstPrompt": "", "firstTitle": "", "customTitle": "", "cwd": ""}
+    """First typed prompt, first auto title, any custom title, the working folder, and the mode it started in (an SDK
+    session writes it only on its first prompt, never as a permission-mode record; the second v4.2 review)."""
+    head = {"firstPrompt": "", "firstTitle": "", "customTitle": "", "cwd": "", "mode": ""}
     for rec in read_jsonl_bytes(path, 0, HEAD_BYTES):
         kind = rec.get("type")
         head["cwd"] = head["cwd"] or rec.get("cwd", "")
+        if kind == "user":
+            head["mode"] = head["mode"] or rec.get("permissionMode") or ""
         if kind == "ai-title" and not head["firstTitle"]:
             head["firstTitle"] = rec.get("aiTitle") or ""
         elif kind == "custom-title" and not head["customTitle"]:
@@ -266,10 +269,18 @@ def read_tail(path, size):
     return parse_tail(read_jsonl_bytes(path, max(0, size - TAIL_BYTES), size))
 
 
+def mode_of(path):
+    """A transcript's permission mode, the newest in its tail or else the one it started in; "" when it has none."""
+    try:
+        return read_tail(path, os.path.getsize(path))["mode"] or read_head(path)["mode"]
+    except (OSError, TypeError):
+        return ""
+
+
 def parse_tail(recs):
     info = {"lastPrompt": "", "lastPromptAt": None, "lastTurnAt": None, "lastTextAt": None, "awaySummary": "", "awaySummaryAt": None,
             "error": "", "steps": [], "pendingAsk": None, "pendingTool": None, "mode": "", "customTitle": "", "endsOn": None}
-    last_text = ""
+    last_text, prompt_mode = "", ""
     open_asks, open_tools = {}, {}
     for rec in recs:
         kind = rec.get("type")
@@ -292,6 +303,7 @@ def parse_tail(recs):
                 info["lastTurnAt"] = at  # a prompt, a peer message or a task notification starts a turn
             if is_typed_prompt(rec):
                 info["lastPrompt"], info["lastPromptAt"], info["steps"] = one_line(message_text(rec)), at, []
+                prompt_mode = rec.get("permissionMode") or prompt_mode
         elif kind == "assistant" and not rec.get("isSidechain"):
             msg = rec.get("message") or {}
             # failed means the newest assistant record is an API error; anything after it clears it
@@ -310,6 +322,7 @@ def parse_tail(recs):
     info["steps"] = info["steps"][-STEPS_KEPT:]
     info["itSaid"], info["asked"] = first_sentence(last_text), asks_question(last_text)  # once per change, not per tick
     info["endsOn"] = ends_on_question(last_text)  # a waiting session waits on its last question, an offer too (G2)
+    info["mode"] = info["mode"] or prompt_mode  # a permission-mode record wins; the Claude app writes none (third review)
     return info
 
 
@@ -426,7 +439,7 @@ class Watcher:
             "away": t["awaySummary"] if (t["awaySummaryAt"] or 0) >= (t["lastTextAt"] or 0) else "",
             "error": t["error"],
             "steps": t["steps"],
-            "mode": t["mode"],
+            "mode": t["mode"] or head["mode"],
             "tmux": reg.get("tmux"),
             "desktop": reg.get("entrypoint") == "claude-desktop",  # a chat in the Claude app (G3)
             "path": path,

@@ -5,6 +5,20 @@ The shape follows Keep a Changelog (https://keepachangelog.com/en/1.1.0/) and th
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-28
+
+### Added
+- A new chat is a chat box, like OpenCode's home screen: `n` (or `+ new chat` at the top of the list) puts it on the right, you type, and Enter starts the session right there.
+- Pick how a new chat runs before it starts: Tab cycles the mode (Yolo, Auto, Plan, Accept edits, Manual), ctrl+l the model, ctrl+t the effort. Your last choice is kept for the next one.
+- ctrl+f picks the folder from a short list (where you ran it, your sessions' folders, `~/Projects`), and the box shows the folder's git branch.
+
+### Changed
+- With no sessions at all, the right side is the new chat.
+- A session brought back with Enter keeps the permission mode it had.
+
+### Removed
+- The three-box new session form, so a new session no longer gets a name as it starts (`R` renames it), and the tip of the day.
+
 ## [4.1.0] - 2026-10-22
 
 ### Added

@@ -89,8 +89,8 @@ class Cockpit:
         self.rows = rows
         self.claude_calls, self.typed, self.notices, self.started = [], [], [], []
         monkeypatch.setattr(tmuxctl, "tmux", self.tmux)
-        monkeypatch.setattr(tmuxctl, "start", lambda prompt="", cwd=None, name=None, resume=None: (
-            self.started.append({"prompt": prompt, "cwd": cwd, "name": name, "resume": resume}), ("cafe0001", ""))[1])
+        monkeypatch.setattr(tmuxctl, "start", lambda prompt="", cwd=None, name=None, resume=None, choice=None: (
+            self.started.append({"prompt": prompt, "cwd": cwd, "name": name, "resume": resume, "choice": choice}), ("cafe0001", ""))[1])
         monkeypatch.setattr(tmuxctl, "jump", lambda target: True)
         monkeypatch.setattr(tmuxctl, "_panes", {})
         monkeypatch.setattr(tmuxctl, "notify", lambda title, text: self.notices.append((title, text)))

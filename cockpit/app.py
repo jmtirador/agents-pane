@@ -15,10 +15,11 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Static
 
-from . import __version__, model, search, sessions, store, tmuxctl, view
+from . import __version__, chat, model, search, sessions, store, tmuxctl, view
 from .dialogs import CSS as DIALOG_CSS
-from .dialogs import Dialog, Find, NewSession, Note, ThemePicker, TypeInto, help_lines
+from .dialogs import Dialog, Find, Note, ThemePicker, TypeInto, help_lines
 from .theme import PALETTES, install
+from .view import NEW_CHAT
 
 IN_TMUX = bool(os.environ.get("TMUX"))
 PAST = {"stop": "stopped", "remove": "removed"}
@@ -124,6 +125,7 @@ class ListScreen(Screen):
         self.rows, self.order, self.sids = [], [], []
         self.selected = self.live = self.pending = None
         self.slot = "?"  # what the tmux thread last saw (or asked for) on the right side; "?" until it first reads it
+        self.switches = self.landed = 0  # changes of the right side asked for, and run on the tmux thread (switch)
         self.warm = set()  # jobs with a viewer, as of the last read: switching to one is instant (G9)
         self.peeked = None  # the peek on the right side, as last written ({} the welcome screen, None a live session)
         self.attached = None  # is anyone looking? None until the first read (G10, G12)
@@ -194,15 +196,17 @@ class ListScreen(Screen):
             self.snapping.release()
 
     def read_slot(self):
-        """What the right side shows. It runs on the tmux thread after any switch the list queued, so it's never stale;
-        a change it didn't ask for came from the welcome screen (it started a session) or `yolo "prompt"`."""
+        """What the right side shows, read on the tmux thread; a change the list didn't ask for came from the welcome
+        screen (it started a session) or `yolo "prompt"`. A switch asked for while this look waited in the queue lands
+        after it, so went_live drops the look when the list has asked for more switches than had landed (the reviews)."""
+        asked = self.landed  # every switch counted here has run, on this same thread
         job, self.warm, attached = tmuxctl.look()
         if attached != self.attached or (attached and date.today().isoformat() not in self.state["opens"]):
             self.app.call_from_thread(self.looking, attached)  # also a new day with the same client still attached
         if job and job != self.slot:
             first = self.slot == "?"
             self.slot = job
-            self.app.call_from_thread(self.went_live, None if job == "welcome" else job, first)
+            self.app.call_from_thread(self.went_live, None if job == "welcome" else job, first, asked)
 
     def looking(self, attached):
         """A client attached (or left). The pulse only runs while someone can see it (G10), and a day he opens it counts
@@ -213,8 +217,12 @@ class ListScreen(Screen):
             self.state["opens"] = (self.state["opens"] + [today])[-60:]
             store.save(self.state)
 
-    def went_live(self, job, first=False):
+    def went_live(self, job, first=False, asked=None):
+        if asked is not None and asked != self.switches:
+            return  # n was handled while this look was out: the box it asked for lands next, and the next look agrees
         self.live = job
+        if job:  # a session took the right side (the chat box became it, or `yolo "prompt"`): no peek or box is up (review 2)
+            self.peeked = None
         selected = self.selected
         self.point_at(job)
         self.redraw()
@@ -234,7 +242,8 @@ class ListScreen(Screen):
 
     def apply(self, rows):
         selected = self.selected  # a card that went away, or one that showed up late, moves the cursor: then reveal it
-        was_at = self.card_sids().index(self.selected) if self.selected and self.selected in self.sids else None
+        cards = [s for s in self.card_sids() if s != NEW_CHAT]
+        was_at = cards.index(self.selected) if self.selected in cards else None
         before = {r["sid"]: r["state"] for r in self.rows}
         for r in rows:
             if before.get(r["sid"], r["state"]) != r["state"]:
@@ -243,7 +252,7 @@ class ListScreen(Screen):
         self.order = model.stable_order(rows, self.order, self.selected)
         if self.pending and (found := self.row_by_job(self.pending)):
             self.selected, self.pending = found["sid"], None
-        if not self.row(self.selected):
+        if self.selected != NEW_CHAT and not self.row(self.selected):
             shown, _ = model.visible(rows, self.order, self.show_quiet, None)
             live_row = self.row_by_job(self.live)
             if was_at is not None and shown:  # it was removed: the card that slid into its place, shown on the right too
@@ -252,7 +261,7 @@ class ListScreen(Screen):
                     self.background(tmuxctl.focus, "list")
                 self.follow_soon()
             else:
-                self.selected = live_row["sid"] if live_row else shown[0]["sid"] if shown else None
+                self.selected = live_row["sid"] if live_row else shown[0]["sid"] if shown else NEW_CHAT
         self.redraw()
         if self.selected != selected:
             self.reveal()
@@ -266,7 +275,10 @@ class ListScreen(Screen):
         if not IN_TMUX or self.switch_timer or self.slot in ("?", "") or self.live:
             return
         row = self.row(self.selected)
-        if not row or (row["jobId"] and row["alive"]) or peek_of(row, int(time.time() * 1000)) != self.peeked:
+        if not row:  # the new chat: written once on arrival, never again while he types in it
+            if not (self.peeked or {}).get("compose"):
+                self.follow()
+        elif (row["jobId"] and row["alive"]) or peek_of(row, int(time.time() * 1000)) != self.peeked:
             self.follow()
 
     def changed(self, row, was):
@@ -401,9 +413,9 @@ class ListScreen(Screen):
         row = self.row(self.selected)
         if not IN_TMUX:
             return
-        if not row:  # nothing to show (every card idle and folded): the welcome screen, not an old peek (review 1)
-            if self.peeked != {}:
-                self.peek(None)
+        if not row:  # the new chat row, or no card at all: the chat box (H1), never an old peek (review 1)
+            if not (self.peeked or {}).get("compose"):
+                self.new_chat()
             return
         if row["jobId"] and row["alive"]:
             if row["jobId"] != self.live:
@@ -413,10 +425,23 @@ class ListScreen(Screen):
 
     def show(self, job, fresh=False):
         self.live, self.peeked = job, None
-        self.point_at(job)
-        self.background(self.put_on_right, job, fresh)
+        self.switch(self.put_on_right, job, fresh)
+        self.point_at(job)  # after the switch, which drops an older pending
         self.redraw()
         self.reveal()
+
+    def switch(self, fn, *args):
+        """Queue a change of the right side, counted when asked and when it has run, so a look that ran before it
+        can't undo it (read_slot). It replaces any session the cursor was waiting to follow (third review)."""
+        self.switches += 1
+        self.pending = None
+        self.background(self.landing, fn, *args)
+
+    def landing(self, fn, *args):
+        try:
+            fn(*args)
+        finally:
+            self.landed += 1
 
     def put_on_right(self, job, fresh):
         if self.slot == "welcome":
@@ -428,14 +453,25 @@ class ListScreen(Screen):
         tmuxctl.view(job, fresh=fresh)
 
     def peek(self, row):
-        """A session the right side can't attach: what it is, what he asked, what it said (G1). Nothing starts.
-        No row is the welcome screen."""
+        """A session the right side can't attach: what it is, what he asked, what it said (G1). Nothing starts."""
         self.live = None
-        self.peeked = peek_of(row, int(time.time() * 1000)) if row else {}
+        self.peeked = peek_of(row, int(time.time() * 1000))
         self.redraw()
-        self.background(self.put_peek, self.peeked)
+        self.switch(self.put_peek, self.peeked)
+
+    def new_chat(self):
+        """The new chat on the right (H1): the welcome viewer's chat box, with the folders it can start in."""
+        self.live = None
+        projects = glob.glob(os.path.join(sessions.HOME, "Projects", "*", ""))
+        folders = sorted(f for f in {r["cwd"] for r in self.rows if r["cwd"]} | {p.rstrip("/") for p in projects}
+                         if os.path.isdir(f))  # a deleted worktree's sessions stay listed; it can't start there (review 2)
+        self.peeked = {"compose": True, "folders": folders}
+        self.redraw()
+        self.switch(self.put_peek, self.peeked)
 
     def put_peek(self, peek):
+        if peek.get("compose"):  # where `yolo` last ran, read now: the welcome viewer lives for days (the design critic)
+            peek = {**peek, "folder": tmuxctl.launch_folder()}
         try:
             store.write_peek(peek)  # before the swap, so the welcome viewer is already redrawing when it comes into view
         except OSError:
@@ -447,13 +483,14 @@ class ListScreen(Screen):
         if not 0 <= line < len(self.sids):
             return
         if self.sids[line]:  # one click opens it: on the right, with the keys (F2), like any chat app
-            if self.switch_timer:
+            if self.switch_timer:  # cleared too, or action_open follows the old card first (the second review)
                 self.switch_timer.stop()
+                self.switch_timer = None
             self.selected = self.sids[line]
             self.redraw()
             self.reveal()
             row = self.row(self.selected)
-            if row and row["jobId"]:
+            if (row and row["jobId"]) or self.selected == NEW_CHAT:
                 self.action_open()
             else:
                 self.follow()
@@ -481,6 +518,11 @@ class ListScreen(Screen):
             self.switch_timer = None
             self.follow()
         row = self.row(self.selected)
+        if self.selected == NEW_CHAT and IN_TMUX:
+            self.peeked = None  # n, Enter or a click always puts a box up: the last one may have just become a session
+            self.follow()  # that the list, reading the right side once a second, hasn't seen yet (review 2)
+            self.background(tmuxctl.focus, "live")  # the keys into the chat box
+            return
         if not row or not IN_TMUX:
             return
         if row["jobId"]:
@@ -491,12 +533,16 @@ class ListScreen(Screen):
         elif row["alive"]:
             self.app.notify(where_it_is(row), title=row["name"])
         else:
-            self.reopen(row["sid"], row["cwd"], row["name"])
+            self.reopen(row["sid"], row["cwd"], row["name"], row["mode"])
 
     @work(thread=True, exit_on_error=False, group="reopen")
-    def reopen(self, sid, cwd, name):
+    def reopen(self, sid, cwd, name, mode=None):
+        """Bring an ended session back in the background, in the mode it had (a plan session stays a plan session).
+        mode None: a find result, which has no row, so it's read from its transcript (review 2)."""
+        if mode is None:
+            mode = sessions.mode_of(search.read_meta(sid).get("path"))
         self.app.call_from_thread(self.app.notify, "Bringing it back in the background…", title=name)
-        job, why = tmuxctl.start(cwd=cwd, resume=sid)
+        job, why = tmuxctl.start(cwd=cwd, resume=sid, choice={**chat.DEFAULT, "mode": chat.from_transcript(mode)})
         self.app.call_from_thread(self.opened, job, why, name)
 
     def opened(self, job, why, name):
@@ -537,16 +583,12 @@ class ListScreen(Screen):
         self.app.push_screen(screen, done)
 
     def action_new(self):
-        projects = glob.glob(os.path.join(sessions.HOME, "Projects", "*", ""))
-        folders = sorted({sessions.tilde(r["cwd"]) for r in self.rows if r["cwd"]} | {sessions.tilde(p.rstrip("/")) for p in projects})
-        self.dialog(NewSession(tmuxctl.launch_folder(), folders), self.create)
-
-    @work(thread=True, exit_on_error=False, group="new")
-    def create(self, picked):
-        folder, name, prompt = picked
-        self.app.call_from_thread(self.app.notify, prompt[:80], title="Starting a session…")
-        job, why = tmuxctl.start(prompt, folder, name or None)
-        self.app.call_from_thread(self.opened, job, why, name or "the new session")
+        """A new chat (H1): the cursor on the "+ new chat" row, its chat box on the right with the keys. Not select():
+        its follow would put the box up once, and opening it puts it up again."""
+        self.selected = NEW_CHAT
+        self.redraw()
+        self.reveal()
+        self.action_open()
 
     def typed_row(self, verb):
         """The selected session, if text can be typed into it from here."""

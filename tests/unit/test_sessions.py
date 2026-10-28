@@ -81,6 +81,23 @@ class Tail(unittest.TestCase):
     def test_permission_mode_is_read(self):
         self.assertEqual(ap.parse_tail([{"type": "permission-mode", "permissionMode": "bypassPermissions"}])["mode"], "bypassPermissions")
 
+    def test_a_mode_is_read_from_the_newest_prompt_when_no_record_says_it(self):  # third review: the Claude app writes
+        recs = [{**user("plan it"), "permissionMode": "plan"}, {**user("now build it"), "permissionMode": "bypassPermissions"}]
+        self.assertEqual(ap.parse_tail(recs)["mode"], "bypassPermissions")  # no permission-mode records at all
+        record = {"type": "permission-mode", "permissionMode": "bypassPermissions"}
+        self.assertEqual(ap.parse_tail([record, {**user("go"), "permissionMode": "auto"}])["mode"], "bypassPermissions")  # a record wins
+
+    def test_an_sdk_session_mode_is_read_from_its_first_prompt(self):  # second review: 25 of his newest 400 read as yolo
+        import json
+        import tempfile
+        first = {"type": "user", "entrypoint": "sdk-cli", "permissionMode": "dontAsk", "message": {"content": "triage the inbox"}}
+        filler = assistant("x" * 2000)
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps(first) + "\n" + "".join(json.dumps(filler) + "\n" for _ in range(100)))  # past the tail
+        self.assertEqual(ap.mode_of(f.name), "dontAsk")
+        self.assertEqual(ap.read_head(f.name)["mode"], "dontAsk")
+        os.remove(f.name)
+
 
 class States(unittest.TestCase):
     """make_row's state rules, fed fake registry, job and transcript data."""
@@ -88,7 +105,7 @@ class States(unittest.TestCase):
     def row(self, reg=None, job=None, recs=()):
         w = ap.Watcher()
         w.transcript_info = lambda sid, hint=None: (None, ap.parse_tail(list(recs)), "/no/such/path.jsonl")
-        w.heads["s1"] = (0, {"firstPrompt": "fix the ledger", "firstTitle": "Ledger fix", "customTitle": "", "cwd": ""})
+        w.heads["s1"] = (0, {"firstPrompt": "fix the ledger", "firstTitle": "Ledger fix", "customTitle": "", "cwd": "", "mode": ""})
         return w.make_row("s1", reg or {}, job or {}, NOW)
 
     def reg(self, status, **extra):

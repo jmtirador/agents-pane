@@ -161,6 +161,13 @@ def list_header(counts, p: Palette, width, dim=False):
                                      box_side(bar(None, parts, [], width - 2), p), box_bottom(p, width)])
 
 
+NEW_CHAT = "new"  # the "+ new chat" row's place in the list's sids: the cursor on it puts the chat box on the right (H1)
+
+
+def new_chat_line(p: Palette, width, selected):
+    return bar(p.sel if selected else None, [(" + ", p.key), ("new chat", f"bold {p.text}" if selected else p.text2)], [("n ", p.key)], width)
+
+
 def find_line(p: Palette, width):
     return bar(None, [(" /", p.key), (" find an old session", p.text3)], [], width)
 
@@ -175,6 +182,8 @@ def render(rows, order, p: Palette, width, now, frame, *, selected, live, watche
 
     if warning:
         add(bar(None, [(" ⚠ " + warning, p.fail)], [], width))
+    add(new_chat_line(p, width, selected == NEW_CHAT), NEW_CHAT)
+    add(bar(None, [], [], width))
     if not shown and not quiet:
         add(bar(None, [], [], width))
         add(bar(None, [(" No sessions yet.", p.text)], [], width))

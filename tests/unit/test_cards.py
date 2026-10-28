@@ -67,7 +67,7 @@ class Drawing(unittest.TestCase):
 
     def test_each_card_line_maps_back_to_its_session(self):
         lines, sids, _ = self.draw([row("w", "working"), row("d", "done", finishedAt=NOW)])
-        self.assertEqual([s for s in sids if s], ["w", "w", "d"])  # a done session is one line (design B)
+        self.assertEqual([s for s in sids if s], ["new", "w", "w", "d"])  # the new chat row on top; a done session is one line (design B)
 
     def test_a_raw_path_shows_as_its_file_name(self):
         detail = "/Users/x/Downloads/Quarterly\\ report.html"
@@ -93,7 +93,7 @@ class Drawing(unittest.TestCase):
     def test_no_sessions_says_how_to_start(self):
         lines, sids, _ = self.draw([])
         self.assertTrue(any("n starts one" in line for line in lines))
-        self.assertFalse(any(sids))
+        self.assertEqual([s for s in sids if s], ["new"])  # only the new chat row
 
 
 if __name__ == "__main__":

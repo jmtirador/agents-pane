@@ -45,7 +45,7 @@ def test_the_bar_flip_key_brings_the_keys_back_from_claude(rig):
 
 def test_ctrl_bracket_does_nothing_while_a_dialog_is_open(rig):
     start(rig)
-    rig.press("n")
+    rig.press("/")
     rig.wait_for(lambda: rig.option("list", "window_zoomed_flag") == "1", "the dialog taking the window")
     rig.press("C-]")
     time.sleep(1)
