@@ -533,16 +533,14 @@ class ListScreen(Screen):
         elif row["alive"]:
             self.app.notify(where_it_is(row), title=row["name"])
         else:
-            self.reopen(row["sid"], row["cwd"], row["name"], row["mode"])
+            self.reopen(row["sid"], row["cwd"], row["name"])
 
     @work(thread=True, exit_on_error=False, group="reopen")
-    def reopen(self, sid, cwd, name, mode=None):
-        """Bring an ended session back in the background, in the mode it had (a plan session stays a plan session).
-        mode None: a find result, which has no row, so it's read from its transcript (review 2)."""
-        if mode is None:
-            mode = sessions.mode_of(search.read_meta(sid).get("path"))
+    def reopen(self, sid, cwd, name):
+        """Bring an ended session back in the background, in bypass like every session (Pepe 11/13): one the phone's
+        mode menu left in auto comes back skipping permissions, not asking."""
         self.app.call_from_thread(self.app.notify, "Bringing it back in the background…", title=name)
-        job, why = tmuxctl.start(cwd=cwd, resume=sid, choice={**chat.DEFAULT, "mode": chat.from_transcript(mode)})
+        job, why = tmuxctl.start(cwd=cwd, resume=sid, choice=chat.DEFAULT)
         self.app.call_from_thread(self.opened, job, why, name)
 
     def opened(self, job, why, name):

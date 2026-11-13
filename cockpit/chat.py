@@ -1,5 +1,6 @@
 """A new chat's mode, model and effort (problems H2): the choices, what each puts on the `claude --bg` command line,
-and the last ones he picked.
+and the model and effort he picked last. The mode always starts as Yolo: Pepe, 11/13, "ANY session YOU or I open, is
+ALWAYS on bypass permissions mode"; a mode picked with Tab is for that one chat.
 
 The modes are Claude Code's permission modes (code.claude.com/docs/en/permission-modes), with yolo first because
 that's how he works. Checked on throwaway sessions (Claude Code 2.1.312): `--bg` honors `--permission-mode`,
@@ -20,11 +21,7 @@ MODES = [
     ("manual", "Manual", "asks before anything but reading", "text2"),
 ]
 FLAGS = {"yolo": ["--dangerously-skip-permissions"], "auto": ["--permission-mode", "auto"], "plan": ["--permission-mode", "plan"],
-         "edits": ["--permission-mode", "acceptEdits"], "manual": ["--permission-mode", "manual"],
-         "dontask": ["--permission-mode", "dontAsk"]}  # not offered, but a dontAsk session comes back as one
-# a transcript's permission mode back to a choice, so a session brought back keeps its mode (the v4.2 design critic)
-FROM_TRANSCRIPT = {"bypassPermissions": "yolo", "auto": "auto", "plan": "plan", "acceptEdits": "edits", "default": "manual", "manual": "manual",
-                   "dontAsk": "dontask"}
+         "edits": ["--permission-mode", "acceptEdits"], "manual": ["--permission-mode", "manual"]}
 MODELS = [("", "default model"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")]
 EFFORTS = [("", "default"), ("low", "low"), ("medium", "medium"), ("high", "high"), ("xhigh", "xhigh"), ("max", "max")]
 DEFAULT = {"mode": "yolo", "model": "", "effort": ""}
@@ -52,11 +49,6 @@ def default_effort():
     return (read_json(os.path.join(CLAUDE_DIR, "settings.json")) or {}).get("effortLevel") or ""
 
 
-def from_transcript(mode):
-    """No mode record is how he always ran them (yolo); a mode it doesn't know asks, never skips (review 2)."""
-    return FROM_TRANSCRIPT.get(mode, "manual") if mode else "yolo"
-
-
 def flags(choice):
     """The claude flags for a choice: its mode, and a model and effort only when he picked one."""
     out = list(FLAGS.get(choice.get("mode"), FLAGS["yolo"]))
@@ -71,8 +63,8 @@ def load():
     try:
         with open(PATH) as f:
             saved = json.load(f)
-        offered = {"mode": MODES, "model": MODELS, "effort": EFFORTS}  # one it no longer offers would show as the default
-        return {key: saved[key] if saved.get(key) in [c[0] for c in offered[key]] else value for key, value in DEFAULT.items()}
+        offered = {"model": MODELS, "effort": EFFORTS}  # one it no longer offers would show as the default
+        return {**DEFAULT, **{key: saved[key] for key, choices in offered.items() if saved.get(key) in [c[0] for c in choices]}}
     except (OSError, ValueError, AttributeError):
         return dict(DEFAULT)
 
@@ -81,5 +73,5 @@ def save(choice):
     os.makedirs(os.path.dirname(PATH), exist_ok=True)
     tmp = f"{PATH}.{os.getpid()}.tmp"
     with open(tmp, "w") as f:
-        json.dump({key: choice.get(key, value) for key, value in DEFAULT.items()}, f)
+        json.dump({key: choice.get(key, DEFAULT[key]) for key in ("model", "effort")}, f)  # never the mode (Pepe 11/13)
     os.replace(tmp, PATH)

@@ -95,7 +95,7 @@ Contract: the glyph is what a file proves, the order is who needs you first, the
 - A viewer never ends on its own: any error parks it with a message, because a closed right side would leave the list alone in the window.
 - The right side takes the keys only while no dialog is open (tmux checks the zoom and `@ap_dialog` itself), so a session that starts under a dialog shows without un-zooming it.
 - At most 4 hidden viewers stay warm, one he hasn't seen for 15 minutes is closed, and closing the dashboard closes them all (`client-detached`).
-- A cockpit from before 4.0.0 is rebuilt the next time `yolo` runs.
+- A cockpit from before 4.0.0 is rebuilt the next time `yolo` runs, and so is one still running older code (its `@ap_version`, the repo's commit, differs from the code on disk) once nobody is attached to it through any view of it; with someone attached it waits for the next open, and only the checkout that started it (`@ap_root`) rebuilds it, so a worktree's launcher can't put unmerged code into his cockpit.
 - A pane is closed only when it isn't in the cockpit window, so a race can't close the right side.
 - The peek is drawn by the viewer `welcome` from a file the list writes (`store.write_peek`), checked with a stat 20 times a second; it has no input: typing shows a hint and does nothing, Enter or `r` pressed on their own act on the card through the list, and Esc, Tab or an arrow give the keys back. Swapping a running session in blanks the peek behind it.
 - If the right side ever dies, the next switch builds a new one beside the list (`split-window`; nothing is re-created in place).
@@ -104,7 +104,7 @@ Contract: the glyph is what a file proves, the order is who needs you first, the
   Under it one quiet line names the keys that work right now (`tab mode   ctrl+l model   ctrl+t effort   ctrl+f folder`, or the picker's keys while it is open), and a failed start says why there, keeping the text; so does a folder that's gone (the old form refused it too; `claude` would have started in `~`).
   On a short pane the wordmark goes first, then the hints; the box always stays.
 - Enter starts `claude --bg` in that folder with the mode's flags (`--dangerously-skip-permissions` for Yolo, `--permission-mode auto|plan|acceptEdits|manual` for the rest) and `--model`/`--effort` only when picked; the viewer then attaches the new session in place, with the keys.
-  The mode, model and effort are saved to `~/.claude/agents-pane/new-chat.json` once a session really starts, and the next new chat begins with them; a session brought back keeps its own mode from its transcript.
+  The model and effort are saved to `~/.claude/agents-pane/new-chat.json` once a session really starts, and the next new chat begins with them. The mode starts as Yolo every time (a mode picked with Tab is for that chat only), and an ended session brought back with Enter or `/` runs in Yolo too (a background job reattaches with the mode Claude Code saved for it, its `respawnFlags`): Pepe, 11/13, "ANY session YOU or I open, is ALWAYS on bypass permissions mode".
 
 ## Data (measured 2026-10-06)
 
@@ -124,7 +124,7 @@ A name set with `/rename` or `-n` is re-written into the transcript, so the tail
 | State | Proof | Look | Band |
 |---|---|---|---|
 | needs you | alive, and registry `status=="waiting"`, or job `tempo=="blocked"` while not busy, or an AskUserQuestion with no answer in the tail | `?`, the name and the question in orange, pulsing each spinner frame; no fill | 1 |
-| asks | alive and job `state=="blocked"` while not busy, or finished within 24 h and rule A holds | `?` in the loud color | 1 |
+| asks | alive and job `state=="blocked"` while not busy, or finished within 24 h and either rule A holds or the job is still `blocked` (Claude Code stops its process about an hour after it blocks); the question is the job's `needs` line, else its `detail` | `?` in the loud color | 1 |
 | failed | the newest assistant record is an API error (a later record clears it), or a job failed state | `✗` and the error line in the fail color | 1 |
 | working | alive, and registry `busy` or job `state=="working"`; its age counts from the message that started the turn | `●` in the work color, pulsing between bright and dim | 2 |
 | quiet | working with no file change for 10 minutes | `●` in the quiet color | 2 |

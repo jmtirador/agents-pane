@@ -537,7 +537,7 @@ async def test_the_new_chat_offers_only_folders_that_exist(cockpit, tmp_path):  
         assert str(tmp_path) in folders and gone not in folders
 
 
-async def test_a_session_found_with_find_comes_back_in_its_mode(cockpit, tmp_path, monkeypatch):  # review 2: it came back as yolo
+async def test_a_session_found_with_find_comes_back_in_bypass(cockpit, tmp_path, monkeypatch):  # Pepe 11/13: always bypass
     path = tmp_path / "old.jsonl"
     path.write_text('{"type": "permission-mode", "permissionMode": "plan"}\n')
     monkeypatch.setattr(search, "read_meta", lambda sid: {"path": str(path), "cwd": str(tmp_path)})
@@ -545,11 +545,11 @@ async def test_a_session_found_with_find_comes_back_in_its_mode(cockpit, tmp_pat
         await cockpit.settle(pilot, 1.5)
         cockpit.app.screen.found({"sid": "old-gggg", "cwd": str(tmp_path), "name": "old plan"})
         await cockpit.settle(pilot, 0.5)
-        assert cockpit.started[-1]["resume"] == "old-gggg" and cockpit.started[-1]["choice"]["mode"] == "plan"
+        assert cockpit.started[-1]["resume"] == "old-gggg" and cockpit.started[-1]["choice"]["mode"] == "yolo"
 
 
-async def test_bringing_a_session_back_keeps_its_mode(cockpit):  # the design critic: plan sessions came back as yolo
-    cockpit.rows[:] = [row("old-dddd", "idle", name="old plan", jobId=None, alive=False, mode="plan")]
+async def test_bringing_a_session_back_runs_it_in_bypass(cockpit):  # Pepe 11/13, over the 4.2 critic: a session the
+    cockpit.rows[:] = [row("old-dddd", "idle", name="old plan", jobId=None, alive=False, mode="auto")]  # phone left in auto
     async with cockpit.app.run_test(size=(42, 28)) as pilot:
         await cockpit.settle(pilot, 1.5)
         screen = cockpit.app.screen
@@ -557,4 +557,4 @@ async def test_bringing_a_session_back_keeps_its_mode(cockpit):  # the design cr
         screen.select("old-dddd")
         screen.action_open()
         await cockpit.settle(pilot, 0.5)
-        assert cockpit.started[-1]["resume"] == "old-dddd" and cockpit.started[-1]["choice"]["mode"] == "plan"
+        assert cockpit.started[-1]["resume"] == "old-dddd" and cockpit.started[-1]["choice"]["mode"] == "yolo"

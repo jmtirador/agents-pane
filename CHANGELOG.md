@@ -5,6 +5,15 @@ The shape follows Keep a Changelog (https://keepachangelog.com/en/1.1.0/) and th
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-11-13
+
+### Changed
+- New chats and ended sessions you bring back run in Yolo (bypass permissions). A new chat starts in Yolo each time, and a mode you pick with Tab is for that chat only; your model and effort are still remembered. An ended session brought back with Enter or found with `/` no longer comes back in the auto or plan mode it was left in. A background job you reattach keeps the mode Claude Code saved for it.
+
+### Fixed
+- An update now reaches your dashboard: if it's still running older code, the next `agents-pane` you run with nobody on it rebuilds it. 4.2 never got there, because the dashboard kept running the code it started with.
+- A session waiting on you keeps its place in Waiting for you after Claude Code stops its process (about an hour after it asks), for a day, with what it needs from you in Claude Code's own words. It used to fold away with the idle sessions.
+
 ## [4.2.0] - 2026-10-28
 
 ### Added

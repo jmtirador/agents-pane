@@ -26,22 +26,22 @@ def test_cycling_wraps_around_both_ways():
 
 def test_choices_are_remembered_and_a_bad_file_is_the_default(memory):
     assert chat.load() == chat.DEFAULT
-    chat.save({"mode": "plan", "model": "sonnet", "effort": "low"})
-    assert chat.load() == {"mode": "plan", "model": "sonnet", "effort": "low"}
+    chat.save({"mode": "yolo", "model": "sonnet", "effort": "low"})
+    assert chat.load() == {"mode": "yolo", "model": "sonnet", "effort": "low"}
     open(chat.PATH, "w").write("{not json")
     assert chat.load() == chat.DEFAULT
 
 
 def test_a_saved_choice_it_does_not_offer_is_dropped(tmp_path, monkeypatch):  # review 2: shown as default, sent anyway
     monkeypatch.setattr(chat, "PATH", str(tmp_path / "nc.json"))
-    (tmp_path / "nc.json").write_text('{"mode": "plan", "model": "opus-4", "effort": "ultra"}')
-    assert chat.load() == {"mode": "plan", "model": "", "effort": ""}
+    (tmp_path / "nc.json").write_text('{"mode": "yolo", "model": "opus-4", "effort": "ultra"}')
+    assert chat.load() == {"mode": "yolo", "model": "", "effort": ""}
 
 
-def test_a_mode_it_does_not_offer_comes_back_as_itself_or_asking():  # review 2: dontAsk came back skipping permissions
-    assert chat.flags({"mode": chat.from_transcript("dontAsk")})[-1] == "dontAsk"
-    assert chat.from_transcript("someNewMode") == "manual"  # never more permissive than asking
-    assert chat.from_transcript("") == "yolo"  # a transcript with no mode record: how he always ran them
+def test_a_new_chat_always_starts_in_bypass(tmp_path, monkeypatch):  # Pepe 11/13: "ANY session ... ALWAYS on bypass"
+    monkeypatch.setattr(chat, "PATH", str(tmp_path / "nc.json"))
+    chat.save({"mode": "plan", "model": "sonnet", "effort": "low"})  # a plan chat he started on purpose
+    assert chat.load() == {"mode": "yolo", "model": "sonnet", "effort": "low"}
 
 
 def test_a_new_session_starts_with_the_choices(monkeypatch):

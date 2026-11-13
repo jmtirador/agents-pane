@@ -24,11 +24,12 @@ def test_n_types_a_chat_on_the_right_and_enter_starts_it_there_in_its_mode(rig):
     started = next(line for line in rig.log("calls.log").splitlines() if "--bg" in line)
     assert "--permission-mode auto" in started and started.endswith("-- write the readme")
     assert rig.active() == "live"  # he keeps typing into the chat he just started
-    assert json.loads((rig.config / "agents-pane" / "new-chat.json").read_text())["mode"] == "auto"  # remembered
+    assert "mode" not in json.loads((rig.config / "agents-pane" / "new-chat.json").read_text())  # model and effort only
     rig.press("C-]")
     rig.wait_for(lambda: rig.active() == "list", "the keys back in the list")
     rig.press("n")  # review 2: the session it just started kept the right side, and took his typing
     rig.wait_for(lambda: "Ask anything" in rig.screen("live") and rig.active() == "live", "a fresh chat box, with the keys")
+    rig.wait_for(lambda: "Yolo ·" in rig.screen("live"), "the next chat back in Yolo")  # Pepe 11/13: always bypass
 
 
 def test_esc_in_the_chat_box_gives_the_keys_back_and_keeps_the_draft(rig):

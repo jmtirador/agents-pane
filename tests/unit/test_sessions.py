@@ -78,34 +78,13 @@ class Tail(unittest.TestCase):
         self.assertFalse(ap.is_typed_prompt(user("This session is being continued from a previous conversation")))
         self.assertTrue(ap.is_typed_prompt(user("add pagination")))
 
-    def test_permission_mode_is_read(self):
-        self.assertEqual(ap.parse_tail([{"type": "permission-mode", "permissionMode": "bypassPermissions"}])["mode"], "bypassPermissions")
-
-    def test_a_mode_is_read_from_the_newest_prompt_when_no_record_says_it(self):  # third review: the Claude app writes
-        recs = [{**user("plan it"), "permissionMode": "plan"}, {**user("now build it"), "permissionMode": "bypassPermissions"}]
-        self.assertEqual(ap.parse_tail(recs)["mode"], "bypassPermissions")  # no permission-mode records at all
-        record = {"type": "permission-mode", "permissionMode": "bypassPermissions"}
-        self.assertEqual(ap.parse_tail([record, {**user("go"), "permissionMode": "auto"}])["mode"], "bypassPermissions")  # a record wins
-
-    def test_an_sdk_session_mode_is_read_from_its_first_prompt(self):  # second review: 25 of his newest 400 read as yolo
-        import json
-        import tempfile
-        first = {"type": "user", "entrypoint": "sdk-cli", "permissionMode": "dontAsk", "message": {"content": "triage the inbox"}}
-        filler = assistant("x" * 2000)
-        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
-            f.write(json.dumps(first) + "\n" + "".join(json.dumps(filler) + "\n" for _ in range(100)))  # past the tail
-        self.assertEqual(ap.mode_of(f.name), "dontAsk")
-        self.assertEqual(ap.read_head(f.name)["mode"], "dontAsk")
-        os.remove(f.name)
-
-
 class States(unittest.TestCase):
     """make_row's state rules, fed fake registry, job and transcript data."""
 
     def row(self, reg=None, job=None, recs=()):
         w = ap.Watcher()
         w.transcript_info = lambda sid, hint=None: (None, ap.parse_tail(list(recs)), "/no/such/path.jsonl")
-        w.heads["s1"] = (0, {"firstPrompt": "fix the ledger", "firstTitle": "Ledger fix", "customTitle": "", "cwd": "", "mode": ""})
+        w.heads["s1"] = (0, {"firstPrompt": "fix the ledger", "firstTitle": "Ledger fix", "customTitle": "", "cwd": ""})
         return w.make_row("s1", reg or {}, job or {}, NOW)
 
     def reg(self, status, **extra):
@@ -163,6 +142,43 @@ class States(unittest.TestCase):
 
     def test_a_dead_job_left_blocked_is_not_lime(self):
         self.assertNotEqual(self.row(None, {"state": "working", "tempo": "blocked", "detail": "old"})["state"], "needs")
+
+    def test_a_stopped_session_claude_marks_blocked_still_asks_you_for_a_day(self):  # 11/13 check-up: a launch date waiting
+        ago = lambda hours: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(NOW / 1000 - hours * 3600))  # noqa: E731
+        job = {"state": "blocked", "tempo": "blocked", "needs": "a yes to launch Saturday", "detail": "launch; awaiting a yes"}
+        row = self.row(None, {**job, "updatedAt": ago(3)})  # its process stopped an hour after it asked, as Claude Code does
+        self.assertEqual((row["state"], row["question"]), ("asks", "a yes to launch Saturday"))  # was idle, folded away
+        self.assertEqual(self.row(None, {**job, "updatedAt": ago(25)})["state"], "idle")
+
+    def test_his_answer_to_a_blocked_job_is_never_its_question(self):  # 4.2.1 review: once he answers, the job stays
+        ago = lambda hours: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(NOW / 1000 - hours * 3600))  # noqa: E731
+        row = self.row(None, {"state": "blocked", "tempo": "active", "detail": "ship it", "updatedAt": ago(2)})  # blocked,
+        self.assertNotEqual(row["state"], "asks")  # with his reply as the detail, until its next update
+
+    def test_a_needs_that_isnt_text_doesnt_stop_the_list(self):  # 4.2.1 review: its files are no stable interface
+        ago = lambda hours: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(NOW / 1000 - hours * 3600))  # noqa: E731
+        row = self.row(None, {"state": "blocked", "tempo": "blocked", "needs": ["a yes", "or no"], "detail": "awaiting a yes",
+                              "updatedAt": ago(2)})
+        self.assertEqual((row["state"], row["question"]), ("asks", "awaiting a yes"))
+
+    def test_job_fields_that_arent_text_dont_stop_the_list(self):  # the second review: detail, name and intent crashed
+        row = self.row(self.reg("idle"), {"state": "done", "detail": ["x"], "name": {"a": 1}, "intent": 7, "needs": None})
+        self.assertEqual(row["name"], "Ledger fix")  # his own title still names it
+
+    def test_one_record_that_cant_be_read_drops_only_its_row(self):  # any unknown shape: the safe default is one row gone
+        w = ap.Watcher()
+        w.sources = lambda: {"good": {"reg": {}, "job": {}}, "bad": {"reg": {}, "job": {}}}
+
+        def make_row(sid, reg, job, now):
+            if sid == "bad":
+                raise TypeError("a shape it doesn't know")
+            return {"sid": sid}
+        w.make_row = make_row
+        self.assertEqual(w.snapshot(), [{"sid": "good"}])
+
+    def test_what_claude_says_it_needs_is_the_question(self):  # its own line beats the status detail
+        row = self.row(self.reg("idle"), {"state": "blocked", "tempo": "blocked", "needs": "a yes to merge", "detail": "PR open; awaiting yes"})
+        self.assertEqual(row["question"], "a yes to merge")
 
     def test_an_error_followed_by_a_recovery_is_not_failed(self):
         recs = [assistant("API Error: overloaded", error=True), assistant("Recovered and finished.")]

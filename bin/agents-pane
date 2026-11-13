@@ -12,16 +12,31 @@ s="${AGENTS_PANE_SESSION:-agents}"
 list_cmd=$(printf 'cd %q; while ! env PYTHONPATH=%q ESCDELAY=20 %q -m cockpit; do tmux set-option -u -t "=%q:" @ap_alert; tmux set-option -u -t "=%q:" @ap_waiting; tmux set-option -u -t "=%q:" @ap_dialog; stty sane; printf "\\033[?1049l\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1004l\\033[?1006l\\033[?1015l\\033[?1016l\\033[?2004l\\033[?25h\\033[?7h\\nThe list stopped (see above). Press enter to start it again. "; read -r answer; done' "$root" "$root" "$py" "$s" "$s" "$s")
 live_cmd=$(printf 'cd %q && exec env PYTHONPATH=%q ESCDELAY=20 %q -m cockpit.viewer welcome' "$root" "$root" "$py")
 
+# the code this cockpit runs: a cockpit keeps running the code it started with, so an update needs a rebuild to land
+stamp=$(git -C "$root" rev-parse --short HEAD 2>/dev/null || sed -n 's/^__version__ = "\(.*\)"/\1/p' "$root/cockpit/__init__.py")
+
 # a cockpit missing one of its two panes can't heal in place, so rebuild it, with its hidden viewers (decision 0006);
-# so is one from before 4.0.0, whose right side isn't a viewer (no @ap_job): the upgrade is just running it again
-if tmux has-session -t "=$s" 2>/dev/null && [[ $(tmux list-panes -t "=$s:cockpit" -F '#{@ap_role}#{?#{@ap_job},+,}' 2>/dev/null | sort | tr '\n' ' ') != "list live+ " ]]; then
-  tmux kill-session -t "=$s"
-  tmux kill-session -t "=$s-viewers" 2>/dev/null || true
+# so is one from before 4.0.0, whose right side isn't a viewer (no @ap_job): the upgrade is just running it again;
+# and one this checkout started that runs older code, once nobody is on it, through any view of it (4.2 never reached
+# him: a rebuild left waiting for him to detach died with the session that started it, 11/13); with someone on it, it
+# waits for the next open, and another checkout's launcher (a worktree's) never rebuilds his cockpit on its own code
+if tmux has-session -t "=$s" 2>/dev/null; then
+  # (each read can fail, a server going away say, without ending the script: set -e stops at a failed assignment)
+  on_it=$(tmux list-clients -F '#{session_name} #{session_group}' 2>/dev/null | awk -v s="$s" '$1 == s || $2 == s' || true)
+  started_by=$(tmux show-options -qv -t "=$s:" @ap_root 2>/dev/null || true)
+  running=$(tmux show-options -qv -t "=$s:" @ap_version 2>/dev/null || true)
+  if [[ $(tmux list-panes -t "=$s:cockpit" -F '#{@ap_role}#{?#{@ap_job},+,}' 2>/dev/null | sort | tr '\n' ' ') != "list live+ " ]] \
+      || { [[ "$running" != "$stamp" ]] && [[ -z "$on_it" ]] && [[ -z "$started_by" || "$started_by" == "$root" ]]; }; then
+    tmux kill-session -t "=$s"
+    tmux kill-session -t "=$s-viewers" 2>/dev/null || true
+  fi
 fi
 if ! tmux has-session -t "=$s" 2>/dev/null; then
   tmux new-session -d -s "$s" -n cockpit -x "$(tput cols 2>/dev/null || echo 119)" -y "$(tput lines 2>/dev/null || echo 28)" \
     -e CLAUDE_CODE_TMUX_TRUECOLOR=1 -e COLORTERM=truecolor -e AGENTS_PANE_SESSION="$s" "$list_cmd"
   tmux set-option -t "=$s:" @ap_cockpit 1  # set-option reads -t as a pane: "=name:" is exactly this session
+  tmux set-option -t "=$s:" @ap_version "$stamp"
+  tmux set-option -t "=$s:" @ap_root "$root"
   list=$(tmux display-message -p -t "=$s:cockpit" '#{pane_id}')
   tmux set-option -p -t "$list" @ap_role list
   live=$(tmux split-window -h -d -t "$list" -P -F '#{pane_id}' "$live_cmd")

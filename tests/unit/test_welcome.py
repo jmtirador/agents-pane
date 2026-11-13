@@ -203,17 +203,18 @@ async def test_tab_ctrl_l_and_ctrl_t_change_the_mode_model_and_effort(composing)
         assert "Yolo" in shown(app)
 
 
-async def test_enter_starts_it_here_with_the_choices_and_remembers_them(composing):
+async def test_enter_starts_it_here_with_the_choices_and_remembers_the_model_not_the_mode(composing):
     started, _, repo = composing
     app = welcome.Welcome()
     async with app.run_test(size=(76, 27)) as pilot:
         await pilot.pause(0.6)
-        await pilot.press("tab", "tab")  # Plan
+        await pilot.press("tab", "tab")  # Plan, for this one chat
+        await pilot.press("ctrl+l")  # Opus, for the next one too
         await pilot.press(*"fix it", "ctrl+j", *"then test", "enter")
         await pilot.pause(0.3)
-        assert started == [("fix it\nthen test", str(repo), {"mode": "plan", "model": "", "effort": ""})]
+        assert started == [("fix it\nthen test", str(repo), {"mode": "plan", "model": "opus", "effort": ""})]
         assert app.return_value == "cafe0001"
-    assert chat.load()["mode"] == "plan"
+    assert chat.load() == {"mode": "yolo", "model": "opus", "effort": ""}  # Pepe 11/13: every session starts in bypass
 
 
 async def test_a_session_that_wont_start_keeps_the_text_and_says_why(composing, monkeypatch):  # the critic: auto can refuse

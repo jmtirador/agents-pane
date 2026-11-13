@@ -131,7 +131,8 @@ def is_typed_prompt(rec):
 
 
 def one_line(text, limit=400):
-    text = re.sub(r"\s+", " ", text or "").strip()
+    """Text on one line, cut to a limit; anything that isn't text (a field from a file whose shape changed) is empty."""
+    text = re.sub(r"\s+", " ", text if isinstance(text, str) else "").strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
@@ -233,14 +234,11 @@ def local_time(ms, fmt):
 
 
 def read_head(path):
-    """First typed prompt, first auto title, any custom title, the working folder, and the mode it started in (an SDK
-    session writes it only on its first prompt, never as a permission-mode record; the second v4.2 review)."""
-    head = {"firstPrompt": "", "firstTitle": "", "customTitle": "", "cwd": "", "mode": ""}
+    """First typed prompt, first auto title, any custom title and the working folder."""
+    head = {"firstPrompt": "", "firstTitle": "", "customTitle": "", "cwd": ""}
     for rec in read_jsonl_bytes(path, 0, HEAD_BYTES):
         kind = rec.get("type")
         head["cwd"] = head["cwd"] or rec.get("cwd", "")
-        if kind == "user":
-            head["mode"] = head["mode"] or rec.get("permissionMode") or ""
         if kind == "ai-title" and not head["firstTitle"]:
             head["firstTitle"] = rec.get("aiTitle") or ""
         elif kind == "custom-title" and not head["customTitle"]:
@@ -269,26 +267,16 @@ def read_tail(path, size):
     return parse_tail(read_jsonl_bytes(path, max(0, size - TAIL_BYTES), size))
 
 
-def mode_of(path):
-    """A transcript's permission mode, the newest in its tail or else the one it started in; "" when it has none."""
-    try:
-        return read_tail(path, os.path.getsize(path))["mode"] or read_head(path)["mode"]
-    except (OSError, TypeError):
-        return ""
-
-
 def parse_tail(recs):
     info = {"lastPrompt": "", "lastPromptAt": None, "lastTurnAt": None, "lastTextAt": None, "awaySummary": "", "awaySummaryAt": None,
-            "error": "", "steps": [], "pendingAsk": None, "pendingTool": None, "mode": "", "customTitle": "", "endsOn": None}
-    last_text, prompt_mode = "", ""
+            "error": "", "steps": [], "pendingAsk": None, "pendingTool": None, "customTitle": "", "endsOn": None}
+    last_text = ""
     open_asks, open_tools = {}, {}
     for rec in recs:
         kind = rec.get("type")
         at = iso_ms(rec.get("timestamp"))
         if kind == "custom-title":  # /rename and -n write it again and again, so the tail sees the newest
             info["customTitle"] = rec.get("customTitle") or info["customTitle"]
-        elif kind == "permission-mode":
-            info["mode"] = rec.get("permissionMode") or info["mode"]
         elif kind == "last-prompt":
             info["lastPrompt"] = one_line(rec.get("lastPrompt", "")) or info["lastPrompt"]
         elif kind == "system" and rec.get("subtype") == "away_summary":
@@ -303,7 +291,6 @@ def parse_tail(recs):
                 info["lastTurnAt"] = at  # a prompt, a peer message or a task notification starts a turn
             if is_typed_prompt(rec):
                 info["lastPrompt"], info["lastPromptAt"], info["steps"] = one_line(message_text(rec)), at, []
-                prompt_mode = rec.get("permissionMode") or prompt_mode
         elif kind == "assistant" and not rec.get("isSidechain"):
             msg = rec.get("message") or {}
             # failed means the newest assistant record is an API error; anything after it clears it
@@ -322,7 +309,6 @@ def parse_tail(recs):
     info["steps"] = info["steps"][-STEPS_KEPT:]
     info["itSaid"], info["asked"] = first_sentence(last_text), asks_question(last_text)  # once per change, not per tick
     info["endsOn"] = ends_on_question(last_text)  # a waiting session waits on its last question, an offer too (G2)
-    info["mode"] = info["mode"] or prompt_mode  # a permission-mode record wins; the Claude app writes none (third review)
     return info
 
 
@@ -373,7 +359,15 @@ class Watcher:
         for cache in (self.heads, self.tails):  # forget sessions that are gone
             for sid in cache.keys() - found.keys():
                 cache.pop(sid, None)
-        return [row for sid, src in found.items() if (row := self.make_row(sid, src["reg"], src["job"], now))]
+        rows = []
+        for sid, src in found.items():
+            try:
+                row = self.make_row(sid, src["reg"], src["job"], now)
+            except Exception:  # noqa: BLE001 (a record in a shape it doesn't know costs its own row, never the list)
+                continue
+            if row:
+                rows.append(row)
+        return rows
 
     def make_row(self, sid, reg, job, now):
         if reg.get("spare"):
@@ -396,13 +390,16 @@ class Watcher:
         finished = finished_at(reg, job, t)
         ask = t["pendingAsk"]
 
+        # what a blocked job needs from him, in Claude Code's own words (`needs`, written only while blocked), else its status
+        asks_for = one_line(job.get("needs"), 300)
+        needs = asks_for or one_line(job.get("detail"), 300)
         state, question = "idle", ""
         if alive and (status == "waiting" or (job.get("tempo") == "blocked" and not busy) or ask):
             # stopped on a question or a permission prompt right now
-            state, question = "needs", (ask or {}).get("question") or one_line(job.get("detail", ""), 300)
+            state, question = "needs", (ask or {}).get("question") or needs
         elif alive and job_state == "blocked" and not busy:
             # the supervisor says it ended its turn on a question: the soft state
-            state, question = "asks", one_line(job.get("detail", ""), 300)
+            state, question = "asks", needs
         elif (t["error"] and not busy) or job_state in ("failed", "error", "crashed"):
             state = "failed"
         elif alive and (busy or job_state == "working"):
@@ -410,8 +407,12 @@ class Watcher:
         elif job_state in ("stopped", "working"):
             state = "stopped"  # stopped, or its process exited mid-turn
         elif finished:
-            if t["asked"] and now - finished <= ASKS_FOR_S * 1000:
-                state, question = "asks", t["asked"]
+            # Claude Code stops a session's process about an hour after it blocks, and the job still waits on him (11/13);
+            # once he answers, the state stays blocked with his reply as the detail until its next update (the 4.2.1 review)
+            waiting = job_state == "blocked" and (asks_for or job.get("tempo") == "blocked")
+            asked = (needs if waiting else "") or t["asked"]
+            if asked and now - finished <= ASKS_FOR_S * 1000:
+                state, question = "asks", asked
             elif now - finished <= DONE_FOR_S * 1000:
                 state = "done"
 
@@ -433,13 +434,12 @@ class Watcher:
             "lastChange": last_change,
             "question": question,
             "options": (ask or {}).get("options", []),
-            "detail": one_line(job.get("detail", ""), 200),
+            "detail": one_line(job.get("detail"), 200),
             "lastPrompt": t["lastPrompt"] or one_line(job.get("intent", ""), 300),
             "itSaid": t["itSaid"],
             "away": t["awaySummary"] if (t["awaySummaryAt"] or 0) >= (t["lastTextAt"] or 0) else "",
             "error": t["error"],
             "steps": t["steps"],
-            "mode": t["mode"] or head["mode"],
             "tmux": reg.get("tmux"),
             "desktop": reg.get("entrypoint") == "claude-desktop",  # a chat in the Claude app (G3)
             "path": path,

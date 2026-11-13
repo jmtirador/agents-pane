@@ -169,6 +169,53 @@ def test_a_session_started_under_an_open_dialog_leaves_the_dialog_alone(rig):  #
     assert zoomed() and rig.active() == "list"
 
 
+def test_a_cockpit_running_older_code_is_rebuilt_once_nobody_is_on_it(rig):  # 11/13: 4.2 never reached him; the rebuild
+    rig.launch()  # waiting for him to detach died with the session that started it
+    rig.tmux("set-option", "-t", "=agents:", "@ap_version", "0000000")  # what an earlier release stamped
+    rig.tmux("set-option", "-t", "=agents:", "@probe", "old cockpit")
+    rig.launch()
+    assert rig.session_option("@probe") == "" and rig.session_option("@ap_version") not in ("", "0000000")
+
+
+def test_a_cockpit_running_older_code_is_left_alone_while_someone_is_on_it(rig):  # rebuilding would close it under him
+    rig.launch()
+    rig.attach()
+    rig.tmux("set-option", "-t", "=agents:", "@ap_version", "0000000")
+    rig.tmux("set-option", "-t", "=agents:", "@probe", "still here")
+    rig.launch()
+    assert rig.session_option("@probe") == "still here"
+
+
+def test_two_opens_in_a_row_with_nobody_on_it_keep_the_cockpit(rig):  # the second review: the version check never
+    rig.launch()  # ran in the healthy test below, which attaches a client first
+    rig.tmux("set-option", "-t", "=agents:", "@probe", "kept")
+    rig.launch()
+    rig.launch()
+    assert rig.session_option("@probe") == "kept" and rig.session_option("@ap_version")
+
+
+def test_someone_on_a_grouped_view_of_the_cockpit_counts_as_on_it(rig):  # the second review: list-clients missed them
+    rig.launch()
+    rig.tmux("new-session", "-d", "-s", "agents-2", "-t", "=agents")  # another view of the same windows
+    rig.outer = f"{rig.name}-outer"
+    subprocess.run([conftest.REAL_TMUX, "-L", rig.outer, "-f", "/dev/null", "new-session", "-d", "-x", "119", "-y", "29",
+                    f"{rig.shim} attach -t '=agents-2'"], env=rig.env, check=True)
+    rig.wait_for(lambda: rig.tmux("list-clients").stdout.strip(), "a client on the grouped view")
+    rig.tmux("set-option", "-t", "=agents:", "@ap_version", "0000000")
+    rig.tmux("set-option", "-t", "=agents:", "@probe", "on it")
+    rig.launch()
+    assert rig.session_option("@probe") == "on it"
+
+
+def test_another_checkouts_launcher_leaves_his_cockpit_alone(rig):  # the second review: a worktree's bin/agents-pane
+    rig.launch()  # run without a preview name rebuilt his cockpit on unmerged code
+    rig.tmux("set-option", "-t", "=agents:", "@ap_root", "/Users/someone/Projects/agents-pane")
+    rig.tmux("set-option", "-t", "=agents:", "@ap_version", "0000000")
+    rig.tmux("set-option", "-t", "=agents:", "@probe", "his")
+    rig.launch()
+    assert rig.session_option("@probe") == "his"
+
+
 def test_a_healthy_cockpit_is_never_rebuilt(rig):  # a false rebuild would close his dashboard on every yolo
     two_sessions(rig)
     walk_to(rig, A)
